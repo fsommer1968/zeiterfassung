@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arbeitszeiterfassung - Druckansicht</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: Arial, sans-serif;
+            font-size: 9pt;
+            padding: 8mm;
+            background: white;
+            color: #000;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 3mm;
+            border-bottom: 1px solid #000;
+            padding-bottom: 2mm;
+        }
+        
+        h1 {
+            font-size: 14pt;
+            margin-bottom: 2mm;
+        }
+        
+        .stammdaten {
+            display: flex;
+            justify-content: center;
+            gap: 15mm;
+            font-size: 9pt;
+            margin-top: 2mm;
+        }
+        
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 2mm;
+            font-size: 9pt;
+        }
+        
+        .info-item {
+            display: flex;
+            gap: 3mm;
+        }
+        
+        .info-label {
+            font-weight: bold;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 3mm;
+        }
+        
+        th, td {
+            border: 1px solid #000;
+            padding: 1.5mm;
+            text-align: center;
+            font-size: 8pt;
+        }
+        
+        th {
+            background-color: #e0e0e0;
+            font-weight: bold;
+            font-size: 9pt;
+        }
+        
+        .weekend-row {
+            background-color: #f5f5f5;
+        }
+        
+        .summary {
+            margin-top: 3mm;
+            border-top: 1px solid #000;
+            padding-top: 2mm;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+        
+        .summary h2 {
+            font-size: 11pt;
+            margin: 0;
+        }
+        
+        .summary-table {
+            display: grid;
+            grid-template-columns: auto auto;
+            gap: 2mm 5mm;
+            text-align: right;
+        }
+        
+        .summary-label {
+            font-weight: bold;
+            font-size: 9pt;
+            text-align: left;
+        }
+        
+        .summary-value {
+            font-weight: bold;
+            font-size: 9pt;
+            text-align: right;
+        }
+        
+        .footer {
+            margin-top: 3mm;
+            text-align: center;
+            font-size: 7pt;
+            color: #666;
+        }
+        
+        .no-print {
+            margin: 10mm 0;
+            text-align: center;
+        }
+        
+        .no-print button {
+            padding: 10px 30px;
+            font-size: 14pt;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 0 5px;
+        }
+        
+        .no-print button:hover {
+            background-color: #0056b3;
+        }
+        
+        .no-print button.secondary {
+            background-color: #6c757d;
+        }
+        
+        .no-print button.secondary:hover {
+            background-color: #545b62;
+        }
+        
+        @media print {
+            body {
+                padding: 5mm;
+            }
+            
+            .no-print {
+                display: none;
+            }
+            
+            @page {
+                size: A4 portrait;
+                margin: 8mm;
+            }
+            
+            /* Verhindere Seitenumbrüche in der Tabelle */
+            table {
+                page-break-inside: avoid;
+            }
+            
+            tr {
+                page-break-inside: avoid;
+                page-break-after: auto;
+            }
+            
+            thead {
+                display: table-header-group;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="no-print">
+        <button onclick="window.print()">🖨️ Drucken</button>
+        <button class="secondary" onclick="window.close()">❌ Schließen</button>
+    </div>
+
+    <div class="header">
+        <h1 id="titel">Arbeitszeiterfassung</h1>
+        <div class="stammdaten">
+            <div><strong>Name:</strong> <span id="mitarbeiterName">-</span></div>
+            <div><strong>Beschäftigungsgrad:</strong> <span id="beschaeftigungsgrad">-</span></div>
+        </div>
+    </div>
+    
+    <div class="info-row">
+        <div class="info-item">
+            <span class="info-label">SOLL-Stunden:</span>
+            <span id="sollStunden">0:00</span>
+        </div>
+        <div class="info-item">
+            <span class="info-label">Übertrag Vormonat:</span>
+            <span id="uebertragVormonat">0:00</span>
+        </div>
+    </div>
+    
+    <table id="zeiterfassungTabelle">
+        <thead>
+            <tr>
+                <th style="width: 6%;">Tag</th>
+                <th style="width: 12%;">Wochentag</th>
+                <th style="width: 10%;">Von</th>
+                <th style="width: 10%;">Bis</th>
+                <th style="width: 10%;">Von</th>
+                <th style="width: 10%;">Bis</th>
+                <th style="width: 12%;">Vor/Nach</th>
+                <th style="width: 12%;">Stunden</th>
+                <th style="width: 12%;">Gesamt</th>
+            </tr>
+        </thead>
+        <tbody id="tabellenBody">
+            <!-- Wird dynamisch gefüllt -->
+        </tbody>
+    </table>
+    
+    <div class="summary">
+        <h2>Zusammenfassung</h2>
+        <div class="summary-table">
+            <span class="summary-label">IST-Stunden:</span>
+            <span class="summary-value" id="istStunden">0:00</span>
+            
+            <span class="summary-label">SOLL-Stunden:</span>
+            <span class="summary-value" id="sollStundenSummary">0:00</span>
+            
+            <span class="summary-label">Übertrag:</span>
+            <span class="summary-value" id="uebertrag">0:00</span>
+        </div>
+    </div>
+    
+    <div class="footer">
+        Erstellt am: <span id="erstellungsDatum"></span>
+    </div>
+
+    <script>
+        // Daten aus sessionStorage laden
+        window.onload = function() {
+            // Aktuelles Datum setzen
+            const jetzt = new Date();
+            document.getElementById('erstellungsDatum').textContent =
+                jetzt.toLocaleDateString('de-DE') + ' ' + jetzt.toLocaleTimeString('de-DE');
+            
+            // Lade Daten aus sessionStorage
+            ladeDatenAusSessionStorage();
+        };
+        
+        function ladeDatenAusSessionStorage() {
+            try {
+                // Hole die Daten aus sessionStorage
+                const druckDatenJSON = sessionStorage.getItem('druckDaten');
+                
+                if (!druckDatenJSON) {
+                    throw new Error('Keine Druckdaten gefunden');
+                }
+                
+                const daten = JSON.parse(druckDatenJSON);
+                
+                // Titel setzen
+                document.getElementById('titel').textContent =
+                    `Arbeitszeiterfassung ${daten.monat} ${daten.jahr}`;
+                
+                // Stammdaten setzen
+                document.getElementById('mitarbeiterName').textContent = daten.mitarbeiterName || '-';
+                document.getElementById('beschaeftigungsgrad').textContent = daten.beschaeftigungsgrad || '-';
+                
+                // Info-Daten setzen
+                document.getElementById('uebertragVormonat').textContent = daten.uebertragVormonat;
+                document.getElementById('sollStunden').textContent = daten.sollStunden;
+                
+                // Zusammenfassung setzen
+                document.getElementById('istStunden').textContent = daten.istStunden;
+                document.getElementById('sollStundenSummary').textContent = daten.sollStunden;
+                document.getElementById('uebertrag').textContent = daten.uebertrag;
+                
+                // Hilfsfunktion: Formatiere Zeit mit führender Null
+                function formatTime(time) {
+                    if (!time || time === 'XXXXX' || time === '') return time;
+                    
+                    // Prüfe ob es eine Uhrzeit ist (Format H:MM oder HH:MM)
+                    const timeMatch = time.match(/^(\d{1,2}):(\d{2})$/);
+                    if (timeMatch) {
+                        const hours = timeMatch[1].padStart(2, '0');
+                        const minutes = timeMatch[2];
+                        return `${hours}:${minutes}`;
+                    }
+                    
+                    return time;
+                }
+                
+                // Tabelle füllen
+                const tbody = document.getElementById('tabellenBody');
+                
+                daten.zeilen.forEach(zeile => {
+                    const rowClass = zeile.istWochenende ? 'weekend-row' : '';
+                    
+                    const neueZeile = tbody.insertRow();
+                    neueZeile.className = rowClass;
+                    neueZeile.innerHTML = `
+                        <td>${zeile.tag}</td>
+                        <td>${zeile.wochentag}</td>
+                        <td>${formatTime(zeile.von1)}</td>
+                        <td>${formatTime(zeile.bis1)}</td>
+                        <td>${formatTime(zeile.von2)}</td>
+                        <td>${formatTime(zeile.bis2)}</td>
+                        <td>${zeile.vornach}</td>
+                        <td>${zeile.stunden}</td>
+                        <td>${zeile.gesamt}</td>
+                    `;
+                });
+                
+                // Daten aus sessionStorage löschen (Cleanup)
+                sessionStorage.removeItem('druckDaten');
+                
+            } catch (e) {
+                console.error('Fehler beim Laden der Daten:', e);
+                alert('Fehler beim Laden der Daten. Bitte öffnen Sie die Druckansicht über den Drucken-Button in der Hauptansicht.');
+            }
+        }
+    </script>
+</body>
+</html>

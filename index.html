@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <meta name="description" content="Responsive Zeiterfassung - Web-basierte Zeiterfassungsanwendung">
+    <meta name="theme-color" content="#0d6efd">
+    <title>Zeiterfassung - Web App</title>
+    
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="manifest.json">
+    
+    <!-- Apple Touch Icon -->
+    <link rel="apple-touch-icon" href="icon-192.png">
+    
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-dark bg-primary sticky-top">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="#">
+                <i class="bi bi-clock-history"></i> Zeiterfassung
+            </a>
+            <span class="navbar-text text-white" style="font-size: 0.85em; opacity: 0.8;">
+                v16.03.2026 20:43
+            </span>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="container-fluid py-4">
+        <!-- Monatsauswahl -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card shadow-sm">
+                    <div class="card-body">
+                        <!-- Stammdaten -->
+                        <div class="row mb-3">
+                            <div class="col-md-6 mb-3 mb-md-0">
+                                <label for="mitarbeiterName" class="form-label fw-bold">Name:</label>
+                                <input type="text" class="form-control" id="mitarbeiterName" placeholder="Vor- und Nachname">
+                            </div>
+                            <div class="col-md-6 mb-3 mb-md-0">
+                                <label for="beschaeftigungsgrad" class="form-label fw-bold">Beschäftigungsgrad:</label>
+                                <input type="text" class="form-control" id="beschaeftigungsgrad" placeholder="z.B. 100%, 80%, 50%">
+                            </div>
+                        </div>
+                        
+                        <!-- Monatsauswahl und SOLL-Stunden -->
+                        <div class="row align-items-end">
+                            <div class="col-md-3 col-6 mb-3 mb-md-0">
+                                <label for="jahrSelect" class="form-label fw-bold">Jahr:</label>
+                                <select class="form-select" id="jahrSelect">
+                                    <!-- Wird dynamisch gefüllt -->
+                                </select>
+                            </div>
+                            <div class="col-md-3 col-6 mb-3 mb-md-0">
+                                <label for="monatSelect" class="form-label fw-bold">Monat:</label>
+                                <select class="form-select" id="monatSelect">
+                                    <option value="0">Januar</option>
+                                    <option value="1">Februar</option>
+                                    <option value="2">März</option>
+                                    <option value="3">April</option>
+                                    <option value="4">Mai</option>
+                                    <option value="5">Juni</option>
+                                    <option value="6">Juli</option>
+                                    <option value="7">August</option>
+                                    <option value="8">September</option>
+                                    <option value="9">Oktober</option>
+                                    <option value="10">November</option>
+                                    <option value="11">Dezember</option>
+                                </select>
+                            </div>
+                            <div class="col-md-6 col-12">
+                                <label for="sollStunden" class="form-label fw-bold">
+                                    <i class="bi bi-clock"></i> SOLL-Stunden:
+                                </label>
+                                <div class="input-group">
+                                    <input type="text" class="form-control" id="sollStunden" placeholder="160:00" pattern="^\d+:\d{2}$">
+                                    <button class="btn btn-outline-secondary" type="button" id="btnSollSpeichern">
+                                        <i class="bi bi-save"></i> Speichern
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Übertrag Vormonat -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card shadow-sm bg-warning bg-opacity-10">
+                    <div class="card-body">
+                        <div class="row align-items-center">
+                            <div class="col-md-6 mb-2 mb-md-0">
+                                <h6 class="mb-0">
+                                    <i class="bi bi-arrow-left-circle"></i> Übertrag Vormonat:
+                                </h6>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="input-group">
+                                    <input type="text" class="form-control" id="uebertragVormonat" 
+                                           placeholder="0:00" pattern="^-?\d+:\d{2}$">
+                                    <button class="btn btn-outline-secondary" type="button" id="btnUebertragSpeichern">
+                                        <i class="bi bi-save"></i> Speichern
+                                    </button>
+                                </div>
+                                <small class="text-muted">Format: HH:MM oder -HH:MM (z.B. 5:30 oder -2:15)</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Desktop Tabellen-Ansicht -->
+        <div class="row mb-4" id="desktopTableView">
+            <div class="col-12">
+                <div class="card shadow">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="mb-0">
+                            <i class="bi bi-calendar3"></i>
+                            <span id="monatsTitel">Zeiterfassung</span>
+                        </h5>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-hover table-bordered mb-0" id="zeiterfassungTabelle">
+                                <thead class="table-primary">
+                                    <tr>
+                                        <th class="text-center" style="width: 60px;">Tag</th>
+                                        <th class="text-center" style="width: 100px;">Wochentag</th>
+                                        <th class="text-center" style="width: 100px;">Von</th>
+                                        <th class="text-center" style="width: 100px;">Bis</th>
+                                        <th class="text-center" style="width: 100px;">Von</th>
+                                        <th class="text-center" style="width: 100px;">Bis</th>
+                                        <th class="text-center" style="width: 120px;">Vor/Nach</th>
+                                        <th class="text-center" style="width: 120px;">Stunden</th>
+                                        <th class="text-center" style="width: 120px;">Gesamt</th>
+                                        <th class="text-center" style="width: 80px;">Aktion</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="zeiterfassungBody">
+                                    <!-- Wird dynamisch gefüllt -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Mobile Card-Ansicht -->
+        <div class="row mb-4" id="mobileCardView">
+            <div class="col-12">
+                <!-- Mobile Schnellzugriff Buttons -->
+                <div class="card shadow mb-3">
+                    <div class="card-body p-2">
+                        <div class="d-flex gap-2 justify-content-between">
+                            <button class="btn btn-primary flex-fill" id="btnMobileDruckenTop">
+                                <i class="bi bi-printer"></i> Drucken
+                            </button>
+                            <button class="btn btn-warning flex-fill" id="btnMobileBackupTop">
+                                <i class="bi bi-cloud-download"></i> Backup
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="card shadow mb-3">
+                    <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">
+                            <i class="bi bi-calendar3"></i>
+                            <span id="monatsTitelMobile">Zeiterfassung</span>
+                        </h5>
+                        <button class="btn btn-outline-light" type="button" data-bs-toggle="collapse" data-bs-target="#mobileMenu" aria-expanded="false" aria-controls="mobileMenu">
+                            <i class="bi bi-list" style="font-size: 1.8rem;"></i> Menü
+                        </button>
+                    </div>
+                    <div class="collapse" id="mobileMenu">
+                        <div class="card-body bg-light">
+                            <div class="d-grid gap-2">
+                                <button class="btn btn-primary" id="btnMobileDrucken">
+                                    <i class="bi bi-printer"></i> Drucken
+                                </button>
+                                <button class="btn btn-success" id="btnMobileSpeichern">
+                                    <i class="bi bi-save"></i> Alle speichern
+                                </button>
+                                <button class="btn btn-info" id="btnMobileStundenrechner">
+                                    <i class="bi bi-calculator"></i> Stundenrechner
+                                </button>
+                                <hr class="my-2">
+                                <button class="btn btn-outline-success" id="btnMobileExportCSV">
+                                    <i class="bi bi-file-earmark-spreadsheet"></i> CSV Export
+                                </button>
+                                <button class="btn btn-outline-success" id="btnMobileImportCSV">
+                                    <i class="bi bi-file-earmark-arrow-up"></i> CSV Import
+                                </button>
+                                <button class="btn btn-outline-warning" id="btnMobileBackup">
+                                    <i class="bi bi-cloud-download"></i> Backup erstellen
+                                </button>
+                                <button class="btn btn-outline-warning" id="btnMobileRestore">
+                                    <i class="bi bi-cloud-upload"></i> Backup wiederherstellen
+                                </button>
+                                <hr class="my-2">
+                                <div class="mb-2">
+                                    <label for="wochenstundenMobile" class="form-label mb-1">
+                                        <i class="bi bi-clock-history"></i> Wochenstunden bei 100%:
+                                    </label>
+                                    <div class="input-group input-group-sm">
+                                        <input type="text" class="form-control" id="wochenstundenMobile"
+                                               placeholder="39:00" pattern="^\d+:\d{2}$" value="39:00">
+                                        <button class="btn btn-outline-secondary" type="button" id="btnWochenstundenSpeichernMobile">
+                                            <i class="bi bi-save"></i>
+                                        </button>
+                                    </div>
+                                    <small class="text-muted">Format: HH:MM (z.B. 39:00 oder 40:30)</small>
+                                </div>
+                                <div class="mb-2">
+                                    <label for="bundeslandMobile" class="form-label mb-1">
+                                        <i class="bi bi-geo-alt"></i> Bundesland (Feiertage):
+                                    </label>
+                                    <select class="form-select form-select-sm" id="bundeslandMobile">
+                                        <option value="BW">Baden-Württemberg</option>
+                                        <option value="BY">Bayern</option>
+                                        <option value="BE">Berlin</option>
+                                        <option value="BB">Brandenburg</option>
+                                        <option value="HB">Bremen</option>
+                                        <option value="HH">Hamburg</option>
+                                        <option value="HE">Hessen</option>
+                                        <option value="MV">Mecklenburg-Vorpommern</option>
+                                        <option value="NI">Niedersachsen</option>
+                                        <option value="NW">Nordrhein-Westfalen</option>
+                                        <option value="RP">Rheinland-Pfalz</option>
+                                        <option value="SL">Saarland</option>
+                                        <option value="SN">Sachsen</option>
+                                        <option value="ST">Sachsen-Anhalt</option>
+                                        <option value="SH">Schleswig-Holstein</option>
+                                        <option value="TH">Thüringen</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div id="mobileCardContainer">
+                    <!-- Wird dynamisch mit Cards gefüllt -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Zusammenfassung -->
+        <div class="row mb-4">
+            <div class="col-md-4 mb-3">
+                <div class="card shadow-sm border-info">
+                    <div class="card-body">
+                        <h6 class="card-title text-info">
+                            <i class="bi bi-clock"></i> SUMME IST-Stunden
+                        </h6>
+                        <h3 class="mb-0" id="summeIst">0:00</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6 mb-3">
+                <div class="card shadow-sm" id="uebertragCard">
+                    <div class="card-body">
+                        <h6 class="card-title">
+                            <i class="bi bi-arrow-right-circle"></i> Übertrag
+                        </h6>
+                        <h3 class="mb-0" id="uebertrag">0:00</h3>
+                        <small class="text-muted">Bitte manuell in nächsten Monat übertragen</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Schnellaktionen -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card shadow-sm">
+                    <div class="card-body">
+                        <h6 class="card-title">
+                            <i class="bi bi-lightning"></i> Schnellaktionen
+                        </h6>
+                        <div class="btn-group flex-wrap" role="group">
+                            <button type="button" class="btn btn-outline-primary" id="btnAlleSpeichern">
+                                <i class="bi bi-save"></i> Alle speichern
+                            </button>
+                            <button type="button" class="btn btn-outline-info" id="btnStundenrechner">
+                                <i class="bi bi-calculator"></i> Stundenrechner
+                            </button>
+                            <button type="button" class="btn btn-outline-success" id="btnExportCSV">
+                                <i class="bi bi-file-earmark-spreadsheet"></i> CSV Export
+                            </button>
+                            <button type="button" class="btn btn-outline-success" id="btnImportCSV">
+                                <i class="bi bi-file-earmark-arrow-up"></i> CSV Import
+                            </button>
+                            <button type="button" class="btn btn-outline-warning" id="btnBackup">
+                                <i class="bi bi-cloud-download"></i> Backup
+                            </button>
+                            <button type="button" class="btn btn-outline-warning" id="btnRestore">
+                                <i class="bi bi-cloud-upload"></i> Restore
+                            </button>
+                        </div>
+                        <div class="row mt-3">
+                            <div class="col-md-6">
+                                <label for="wochenstunden" class="form-label fw-bold">
+                                    <i class="bi bi-clock-history"></i> Wochenstunden bei 100%:
+                                </label>
+                                <div class="input-group">
+                                    <input type="text" class="form-control" id="wochenstunden"
+                                           placeholder="39:00" pattern="^\d+:\d{2}$" value="39:00">
+                                    <button class="btn btn-outline-secondary" type="button" id="btnWochenstundenSpeichern">
+                                        <i class="bi bi-save"></i> Speichern
+                                    </button>
+                                </div>
+                                <small class="text-muted">Format: HH:MM (z.B. 39:00 oder 40:30)</small>
+                            </div>
+                            <div class="col-md-6">
+                                <label for="bundesland" class="form-label fw-bold">
+                                    <i class="bi bi-geo-alt"></i> Bundesland (Feiertage):
+                                </label>
+                                <select class="form-select" id="bundesland">
+                                    <option value="BW">Baden-Württemberg</option>
+                                    <option value="BY">Bayern</option>
+                                    <option value="BE">Berlin</option>
+                                    <option value="BB">Brandenburg</option>
+                                    <option value="HB">Bremen</option>
+                                    <option value="HH">Hamburg</option>
+                                    <option value="HE">Hessen</option>
+                                    <option value="MV">Mecklenburg-Vorpommern</option>
+                                    <option value="NI">Niedersachsen</option>
+                                    <option value="NW">Nordrhein-Westfalen</option>
+                                    <option value="RP">Rheinland-Pfalz</option>
+                                    <option value="SL">Saarland</option>
+                                    <option value="SN">Sachsen</option>
+                                    <option value="ST">Sachsen-Anhalt</option>
+                                    <option value="SH">Schleswig-Holstein</option>
+                                    <option value="TH">Thüringen</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="btn-group flex-wrap mt-3" role="group">
+                            <button type="button" class="btn btn-outline-info" id="btnDrucken">
+                                <i class="bi bi-printer"></i> Drucken
+                            </button>
+                            <button type="button" class="btn btn-outline-danger" id="btnMonatZuruecksetzen">
+                                <i class="bi bi-trash"></i> Monat zurücksetzen
+                            </button>
+                        </div>
+                        <input type="file" id="csvFileInput" accept=".csv" style="display: none;">
+                        <input type="file" id="backupFileInput" accept=".json" style="display: none;">
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stundenrechner Modal -->
+    <div class="modal fade" id="stundenrechnerModal" tabindex="-1" aria-labelledby="stundenrechnerModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-info text-white">
+                    <h5 class="modal-title" id="stundenrechnerModalLabel">
+                        <i class="bi bi-calculator"></i> Stundenrechner
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <!-- Eingabefelder -->
+                    <div class="row mb-3">
+                        <div class="col-6">
+                            <label for="calcZeit1" class="form-label fw-bold">Zeit 1:</label>
+                            <input type="text" class="form-control" id="calcZeit1" placeholder="HH:MM" pattern="^\d+:\d{2}$">
+                            <small class="text-muted">z.B. 8:30</small>
+                        </div>
+                        <div class="col-6">
+                            <label for="calcZeit2" class="form-label fw-bold">Zeit 2:</label>
+                            <input type="text" class="form-control" id="calcZeit2" placeholder="HH:MM" pattern="^\d+:\d{2}$">
+                            <small class="text-muted">z.B. 5:15</small>
+                        </div>
+                    </div>
+                    
+                    <!-- Operationen -->
+                    <div class="row mb-3">
+                        <div class="col-12">
+                            <label class="form-label fw-bold">Operation:</label>
+                            <div class="btn-group w-100" role="group">
+                                <button type="button" class="btn btn-outline-primary calc-op" data-op="add">
+                                    <i class="bi bi-plus-lg"></i> Addition
+                                </button>
+                                <button type="button" class="btn btn-outline-primary calc-op" data-op="subtract">
+                                    <i class="bi bi-dash-lg"></i> Subtraktion
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="row mb-3">
+                        <div class="col-12">
+                            <div class="btn-group w-100" role="group">
+                                <button type="button" class="btn btn-outline-primary calc-op" data-op="multiply">
+                                    <i class="bi bi-x-lg"></i> Multiplikation
+                                </button>
+                                <button type="button" class="btn btn-outline-primary calc-op" data-op="divide">
+                                    <i class="bi bi-slash-lg"></i> Division
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Ergebnis -->
+                    <div class="row">
+                        <div class="col-12">
+                            <div class="alert alert-info mb-0" role="alert">
+                                <h6 class="alert-heading mb-2">
+                                    <i class="bi bi-check-circle"></i> Ergebnis:
+                                </h6>
+                                <h3 class="mb-0" id="calcErgebnis">--:--</h3>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" id="btnCalcReset">
+                        <i class="bi bi-arrow-counterclockwise"></i> Zurücksetzen
+                    </button>
+                    <button type="button" class="btn btn-primary" data-bs-dismiss="modal">
+                        <i class="bi bi-check-lg"></i> Schließen
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- Custom JS - VERSION 3 mit verbessertem Event-Handling -->
+    <script src="js/app-v3.js"></script>
+</body>
+</html>

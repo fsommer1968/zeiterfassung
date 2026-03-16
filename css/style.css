@@ -1,0 +1,652 @@
+/* ===================================
+   Zeiterfassung Web App - Custom Styles
+   =================================== */
+
+/* Root Variables */
+:root {
+    --primary-color: #0d6efd;
+    --success-color: #198754;
+    --warning-color: #ffc107;
+    --danger-color: #dc3545;
+    --info-color: #0dcaf0;
+    --light-gray: #f8f9fa;
+    --weekend-color: #e9ecef;
+    --transition-speed: 0.3s;
+}
+
+/* Ungespeicherte Änderungen Indikator */
+.unsaved-changes {
+    background-color: #ffe6e6 !important;
+    border-left: 4px solid var(--danger-color) !important;
+    transition: all 0.3s ease;
+}
+
+.saved-changes {
+    background-color: #e6ffe6 !important;
+    border-left: 4px solid var(--success-color) !important;
+    transition: all 0.3s ease;
+}
+
+/* Für Mobile Cards */
+.day-card.unsaved-changes {
+    border-color: var(--danger-color) !important;
+    box-shadow: 0 0 10px rgba(220, 53, 69, 0.3) !important;
+}
+
+.day-card.saved-changes {
+    border-color: var(--success-color) !important;
+    box-shadow: 0 0 10px rgba(25, 135, 84, 0.3) !important;
+}
+
+/* Kopierter Tag Markierung */
+.kopiert-markierung {
+    background-color: #cfe2ff !important;
+    border-left: 4px solid #0d6efd !important;
+    box-shadow: 0 0 10px rgba(13, 110, 253, 0.3) !important;
+    transition: all 0.3s ease;
+}
+
+.day-card.kopiert-markierung {
+    border-color: #0d6efd !important;
+    box-shadow: 0 0 15px rgba(13, 110, 253, 0.5) !important;
+}
+
+/* Toast Animation */
+@keyframes slideIn {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+@keyframes slideOut {
+    from {
+        transform: translateX(0);
+        opacity: 1;
+    }
+    to {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+}
+
+/* Mobile Card View - Hidden by default */
+#mobileCardView {
+    display: none;
+}
+
+/* Desktop Table View - Visible by default */
+#desktopTableView {
+    display: block;
+}
+
+/* Global Styles */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html {
+    scroll-behavior: smooth;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    background-color: #f5f7fa;
+    min-height: 100vh;
+}
+
+/* Navigation */
+.navbar-brand {
+    font-weight: 700;
+    font-size: 1.3rem;
+}
+
+.navbar-brand i {
+    font-size: 1.5rem;
+    vertical-align: middle;
+}
+
+/* Cards */
+.card {
+    border-radius: 12px;
+    border: none;
+    transition: all var(--transition-speed) ease;
+}
+
+.card:hover {
+    transform: translateY(-2px);
+}
+
+.card-header {
+    border-radius: 12px 12px 0 0 !important;
+    border: none;
+}
+
+/* Table Styles */
+.table-responsive {
+    border-radius: 0 0 12px 12px;
+    max-height: 70vh;
+    overflow-y: auto;
+}
+
+#zeiterfassungTabelle {
+    margin-bottom: 0;
+}
+
+#zeiterfassungTabelle thead {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background-color: var(--primary-color);
+}
+
+#zeiterfassungTabelle thead th {
+    font-weight: 600;
+    font-size: 0.9rem;
+    padding: 12px 8px;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
+#zeiterfassungTabelle tbody td {
+    padding: 8px;
+    vertical-align: middle;
+}
+
+/* Input Fields in Table */
+.time-input,
+.hours-input {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid #ced4da;
+    border-radius: 6px;
+    text-align: center;
+    font-size: 0.95rem;
+    transition: all var(--transition-speed) ease;
+}
+
+.time-input:focus,
+.hours-input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
+}
+
+.time-input:disabled,
+.hours-input:disabled {
+    background-color: var(--weekend-color);
+    cursor: not-allowed;
+}
+
+/* Weekend Rows */
+.weekend-row {
+    background-color: var(--weekend-color);
+}
+
+.weekend-row td {
+    color: #6c757d;
+}
+
+.weekend-text {
+    text-align: center;
+    color: #6c757d;
+    font-weight: 500;
+    font-size: 0.9rem;
+}
+
+/* Calculated Fields */
+.calculated-field {
+    background-color: #e7f3ff;
+    font-weight: 600;
+    text-align: center;
+    padding: 8px;
+    border-radius: 6px;
+}
+
+.total-field {
+    background-color: #d4edda;
+    font-weight: 700;
+    text-align: center;
+    padding: 8px;
+    border-radius: 6px;
+    color: #155724;
+}
+
+/* Action Buttons in Table */
+.btn-save-row {
+    padding: 4px 12px;
+    font-size: 0.85rem;
+    border-radius: 6px;
+}
+
+/* Summary Cards */
+#summeIst,
+#uebertrag {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--primary-color);
+}
+
+#uebertragCard.positive {
+    border-color: var(--success-color) !important;
+}
+
+#uebertragCard.positive #uebertrag {
+    color: var(--success-color);
+}
+
+#uebertragCard.negative {
+    border-color: var(--danger-color) !important;
+}
+
+#uebertragCard.negative #uebertrag {
+    color: var(--danger-color);
+}
+
+/* Form Controls */
+.form-control:focus,
+.form-select:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
+}
+
+/* Buttons */
+.btn {
+    border-radius: 8px;
+    font-weight: 600;
+    transition: all var(--transition-speed) ease;
+}
+
+.btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.btn i {
+    margin-right: 4px;
+}
+
+/* Mobile Card Styles */
+.day-card {
+    background-color: white;
+    border-radius: 12px;
+    margin-bottom: 1rem;
+    border: 2px solid #dee2e6;
+    transition: all var(--transition-speed) ease;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.day-card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.day-card.weekend-card {
+    background-color: var(--weekend-color);
+    border-color: #adb5bd;
+}
+
+.day-card-header {
+    background: linear-gradient(135deg, var(--primary-color) 0%, #0a58ca 100%);
+    color: white;
+    padding: 12px 16px;
+    border-radius: 10px 10px 0 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.day-card-header.weekend-header {
+    background: linear-gradient(135deg, #6c757d 0%, #495057 100%);
+}
+
+.day-number {
+    font-size: 1.5rem;
+    font-weight: 700;
+}
+
+.day-name {
+    font-size: 0.9rem;
+    opacity: 0.9;
+}
+
+.day-card-body {
+    padding: 16px;
+}
+
+.time-group {
+    margin-bottom: 16px;
+}
+
+.time-group-label {
+    font-weight: 600;
+    color: #495057;
+    margin-bottom: 8px;
+    font-size: 0.9rem;
+    display: block;
+}
+
+.time-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.time-field {
+    flex: 1;
+}
+
+.time-field label {
+    font-size: 0.75rem;
+    color: #6c757d;
+    margin-bottom: 4px;
+    display: block;
+}
+
+.time-field input {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #ced4da;
+    border-radius: 8px;
+    font-size: 1rem;
+    text-align: center;
+}
+
+.time-field input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
+}
+
+.calculated-display {
+    background-color: #e7f3ff;
+    padding: 12px;
+    border-radius: 8px;
+    margin-top: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.calculated-display.total-display {
+    background-color: #d4edda;
+}
+
+.calculated-label {
+    font-size: 0.85rem;
+    color: #495057;
+    font-weight: 600;
+}
+
+.calculated-value {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--primary-color);
+}
+
+.total-display .calculated-value {
+    color: #155724;
+}
+
+.card-save-btn {
+    width: 100%;
+    margin-top: 12px;
+    padding: 12px;
+    font-size: 1rem;
+    border-radius: 8px;
+}
+
+/* Print Styles - Minimalistisch */
+@media print {
+    @page {
+        size: A4 portrait;
+        margin: 10mm;
+    }
+    
+    /* Verstecke nur UI-Elemente */
+    .navbar,
+    button,
+    .btn,
+    #mobileCardView,
+    .container-fluid > .row:nth-child(1),
+    .container-fluid > .row:nth-child(2),
+    .container-fluid > .row:nth-child(3) {
+        display: none !important;
+    }
+    
+    /* Tabelle kompakt */
+    #zeiterfassungTabelle {
+        font-size: 8pt;
+    }
+    
+    #zeiterfassungTabelle th,
+    #zeiterfassungTabelle td {
+        padding: 2px;
+        font-size: 8pt;
+    }
+    
+    .time-input {
+        font-size: 8pt;
+    }
+}
+
+/* Responsive Design */
+@media (max-width: 1199.98px) {
+    #zeiterfassungTabelle {
+        font-size: 0.9rem;
+    }
+    
+    #zeiterfassungTabelle thead th {
+        font-size: 0.85rem;
+        padding: 10px 6px;
+    }
+    
+    .time-input,
+    .hours-input {
+        font-size: 0.9rem;
+        padding: 5px 6px;
+    }
+}
+
+@media (max-width: 991.98px) {
+    .navbar-brand {
+        font-size: 1.1rem;
+    }
+    
+    #zeiterfassungTabelle {
+        font-size: 0.85rem;
+    }
+    
+    #zeiterfassungTabelle thead th {
+        font-size: 0.8rem;
+        padding: 8px 4px;
+    }
+    
+    .time-input,
+    .hours-input {
+        font-size: 0.85rem;
+        padding: 4px 5px;
+    }
+    
+    .btn-save-row {
+        padding: 3px 8px;
+        font-size: 0.8rem;
+    }
+}
+
+/* Mobile View - Switch to Card Layout */
+@media (max-width: 991.98px) {
+    /* Hide desktop table view */
+    #desktopTableView {
+        display: none !important;
+    }
+    
+    /* Show mobile card view */
+    #mobileCardView {
+        display: block !important;
+    }
+    
+    .container-fluid {
+        padding-left: 10px;
+        padding-right: 10px;
+    }
+    
+    .card-body {
+        padding: 1rem;
+    }
+    
+    #summeIst,
+    #uebertrag {
+        font-size: 1.5rem;
+    }
+    
+    .btn-group {
+        flex-direction: column;
+    }
+    
+    .btn-group .btn {
+        width: 100%;
+        margin-bottom: 8px;
+    }
+}
+
+@media (max-width: 575.98px) {
+    .navbar-brand {
+        font-size: 1rem;
+    }
+    
+    .day-number {
+        font-size: 1.3rem;
+    }
+    
+    .day-name {
+        font-size: 0.85rem;
+    }
+    
+    .time-field input {
+        padding: 8px;
+        font-size: 0.95rem;
+    }
+    
+    #summeIst,
+    #uebertrag {
+        font-size: 1.3rem;
+    }
+}
+
+/* Animations */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.day-card {
+    animation: fadeIn 0.3s ease-out;
+}
+
+/* Scrollbar Styling */
+.table-responsive::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.table-responsive::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 10px;
+}
+
+.table-responsive::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 10px;
+}
+
+.table-responsive::-webkit-scrollbar-thumb:hover {
+    background: #555;
+}
+
+/* Made with Bob */
+
+
+/* ===================================
+   Stundenrechner Modal Styles
+   =================================== */
+
+/* Calculator Operation Buttons */
+.calc-op {
+    transition: all 0.3s ease;
+    font-weight: 500;
+}
+
+.calc-op:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.calc-op.active {
+    background-color: var(--primary-color) !important;
+    color: white !important;
+    border-color: var(--primary-color) !important;
+}
+
+/* Calculator Input Fields */
+#calcZeit1,
+#calcZeit2 {
+    font-size: 1.1rem;
+    text-align: center;
+    font-weight: 600;
+}
+
+/* Calculator Result Display */
+#calcErgebnis {
+    font-size: 2.5rem;
+    font-weight: 700;
+    text-align: center;
+    color: var(--primary-color);
+    margin: 0;
+}
+
+#stundenrechnerModal .alert {
+    border-radius: 12px;
+    padding: 1.5rem;
+}
+
+#stundenrechnerModal .alert-success #calcErgebnis {
+    color: var(--success-color);
+}
+
+#stundenrechnerModal .alert-warning #calcErgebnis {
+    color: var(--warning-color);
+    font-size: 1.2rem;
+}
+
+/* Modal Responsive Design */
+@media (max-width: 576px) {
+    #stundenrechnerModal .modal-dialog {
+        margin: 0.5rem;
+    }
+    
+    #calcErgebnis {
+        font-size: 2rem;
+    }
+    
+    .calc-op {
+        font-size: 0.85rem;
+        padding: 0.5rem 0.25rem;
+    }
+    
+    .calc-op i {
+        display: block;
+        margin-bottom: 0.25rem;
+    }
+}
