@@ -20,6 +20,8 @@ Eine moderne, responsive Web-Anwendung zur Erfassung von Arbeitszeiten mit umfan
 - **Wochenfunktionen**: Kopieren und Einfügen ganzer Wochen
 - **Tagfunktionen**: Kopieren und Einfügen einzelner Tage
 - **Feiertage**: Automatische Berücksichtigung von Feiertagen nach Bundesland
+  - Feiertagsnamen werden in Spalte 1 angezeigt (z.B. "Ostermontag", "Karfreitag")
+  - Feiertage werden automatisch als freie Tage markiert
 - **Druckfunktion**: Professionelle Druckansicht für Monatsübersichten
 
 ### Datenverwaltung
@@ -86,7 +88,10 @@ Alle Daten werden ausschließlich lokal im Browser gespeichert. Es erfolgt keine
 
 ## Version
 
-Aktuelle Version: v16.03.2026 20:43
+Aktuelle Version: v16.03.2026 20:32
+
+### Changelog
+- **v16.03.2026 20:32**: Feiertagsnamen werden jetzt in Spalte 1 angezeigt
 
 ## Autor
 

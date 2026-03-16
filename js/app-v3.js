@@ -366,12 +366,12 @@ async function ladeFeiertage(jahr) {
         
         const feiertage = await response.json();
         
-        // Konvertiere zu Set von Datumsstrings (YYYY-MM-DD)
-        const feiertageDaten = new Set();
+        // Konvertiere zu Map von Datumsstrings (YYYY-MM-DD) -> Feiertagsname
+        const feiertageDaten = new Map();
         for (const [name, feiertagObj] of Object.entries(feiertage)) {
             // API gibt Objekte zurück: {datum: '2026-01-01', hinweis: ''}
             const datum = feiertagObj.datum;
-            feiertageDaten.add(datum);
+            feiertageDaten.set(datum, name);
         }
         
         // In Cache speichern
@@ -379,15 +379,15 @@ async function ladeFeiertage(jahr) {
         
         return feiertageDaten;
     } catch (error) {
-        // Bei Fehler leeres Set zurückgeben
-        return new Set();
+        // Bei Fehler leere Map zurückgeben
+        return new Map();
     }
 }
 
-// Prüfe ob ein Datum ein Feiertag ist
+// Prüfe ob ein Datum ein Feiertag ist und gib den Namen zurück
 function istFeiertag(jahr, monat, tag, feiertage) {
     if (!FEATURES.FEIERTAGE_LADEN) {
-        return false; // Feature deaktiviert
+        return null; // Feature deaktiviert
     }
     
     // Formatiere Datum als YYYY-MM-DD ohne Zeitzone-Probleme
@@ -395,7 +395,7 @@ function istFeiertag(jahr, monat, tag, feiertage) {
     const tagString = String(tag).padStart(2, '0');
     const datumString = `${jahr}-${monatString}-${tagString}`;
     
-    return feiertage.has(datumString);
+    return feiertage.get(datumString) || null;
 }
 
 // ===================================
@@ -444,16 +444,16 @@ async function ladeMonat(jahr, monat) {
         const datum = new Date(jahr, monat, tag);
         const wochentag = WOCHENTAGE[datum.getDay()];
         const istWochenende = (datum.getDay() === 0 || datum.getDay() === 6);
-        const istFeiertagHeute = istFeiertag(jahr, monat, tag, feiertage);
+        const feiertagName = istFeiertag(jahr, monat, tag, feiertage);
         
         // Wochenende ODER Feiertag
-        const istFreierTag = istWochenende || istFeiertagHeute;
+        const istFreierTag = istWochenende || (feiertagName !== null);
         
         // Desktop: Tabellenzeile erstellen
-        erstelleZeile(tag, wochentag, istFreierTag);
+        erstelleZeile(tag, wochentag, istFreierTag, feiertagName);
         
         // Mobile: Card erstellen
-        erstelleMobileCard(tag, wochentag, istFreierTag);
+        erstelleMobileCard(tag, wochentag, istFreierTag, feiertagName);
     }
     
     
@@ -942,7 +942,7 @@ function macheStundenFelderEditierbar() {
 // ===================================
 // Zeile erstellen (Desktop Tabelle)
 // ===================================
-function erstelleZeile(tag, wochentag, istWochenende) {
+function erstelleZeile(tag, wochentag, istWochenende, feiertagName = null) {
     const tbody = document.getElementById('zeiterfassungBody');
     const tr = document.createElement('tr');
     tr.className = istWochenende ? 'weekend-row' : '';
@@ -951,7 +951,11 @@ function erstelleZeile(tag, wochentag, istWochenende) {
     // Tag
     const tdTag = document.createElement('td');
     tdTag.className = 'text-center fw-bold';
-    tdTag.textContent = tag;
+    if (feiertagName) {
+        tdTag.innerHTML = `${tag}<br><small style="font-weight: normal; font-size: 0.8em;">${feiertagName}</small>`;
+    } else {
+        tdTag.textContent = tag;
+    }
     tr.appendChild(tdTag);
     
     // Wochentag
@@ -1185,7 +1189,7 @@ function erstelleZeile(tag, wochentag, istWochenende) {
 // ===================================
 // Mobile Card erstellen
 // ===================================
-function erstelleMobileCard(tag, wochentag, istWochenende) {
+function erstelleMobileCard(tag, wochentag, istWochenende, feiertagName = null) {
     const container = document.getElementById('mobileCardContainer');
     
     if (!container) {
@@ -1200,10 +1204,12 @@ function erstelleMobileCard(tag, wochentag, istWochenende) {
     // Card Header
     const header = document.createElement('div');
     header.className = `day-card-header ${istWochenende ? 'weekend-header' : ''}`;
+    const feiertagText = feiertagName ? `<div class="day-holiday" style="font-size: 0.85em; margin-top: 2px;">${feiertagName}</div>` : '';
     header.innerHTML = `
         <div>
             <div class="day-number">${tag}</div>
             <div class="day-name">${wochentag}</div>
+            ${feiertagText}
         </div>
         <div>
             <i class="bi bi-${istWochenende ? 'moon' : 'sun'}"></i>
