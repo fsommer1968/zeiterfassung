@@ -2882,10 +2882,20 @@ function setzeMonatZurueck() {
 // Stammdaten Funktionen
 // ===================================
 function speichereStammdaten() {
+    // Sammle alle Urlaubstage aus localStorage
+    const urlaubstage = {};
+    for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('urlaub_tage_')) {
+            urlaubstage[key] = localStorage.getItem(key);
+        }
+    }
+    
     const stammdaten = {
         mitarbeiterName: document.getElementById('mitarbeiterName').value,
         beschaeftigungsgrad: document.getElementById('beschaeftigungsgrad').value,
-        urlaubstageProJahr: document.getElementById('urlaubstageProJahr').value
+        urlaubstageProJahr: document.getElementById('urlaubstageProJahr').value,
+        urlaubstage: urlaubstage
     };
     
     localStorage.setItem('stammdaten', JSON.stringify(stammdaten));
@@ -2900,6 +2910,16 @@ function ladeStammdaten() {
             document.getElementById('mitarbeiterName').value = stammdaten.mitarbeiterName || '';
             document.getElementById('beschaeftigungsgrad').value = stammdaten.beschaeftigungsgrad || '';
             document.getElementById('urlaubstageProJahr').value = stammdaten.urlaubstageProJahr || '';
+            
+            // Urlaubstage wiederherstellen (falls vorhanden)
+            if (stammdaten.urlaubstage) {
+                Object.keys(stammdaten.urlaubstage).forEach(key => {
+                    // Nur wiederherstellen wenn noch nicht vorhanden
+                    if (!localStorage.getItem(key)) {
+                        localStorage.setItem(key, stammdaten.urlaubstage[key]);
+                    }
+                });
+            }
         } catch (e) {
         }
     }
