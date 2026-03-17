@@ -23,6 +23,7 @@ let kopierteWoche = null; // Zwischenspeicher für kopierte Woche (Sonntag-Tag)
 let kopierteWocheDaten = null; // Array mit 7 Tagen Daten
 let wochenstunden = 39.0; // Standard-Wochenstunden bei 100%
 let bundesland = 'BW'; // Standard-Bundesland für Feiertage
+let urlaubstage = []; // DEPRECATED: Wird nicht mehr verwendet, nur für Kompatibilität
 
 // Deutsche Monatsnamen
 const MONATSNAMEN = [
@@ -32,6 +33,787 @@ const MONATSNAMEN = [
 
 // Deutsche Wochentage (kurz)
 const WOCHENTAGE = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+
+// ===================================
+// Urlaubskalender Funktionen (müssen vor DOMContentLoaded definiert sein)
+// ===================================
+// Hilfsfunktion: Beschäftigungsgrad aus Stammdaten laden
+function getBeschaeftigungsgrad() {
+    try {
+        const beschaeftigungsgradInput = document.getElementById('beschaeftigungsgrad');
+        if (!beschaeftigungsgradInput || !beschaeftigungsgradInput.value) {
+            return 1.0; // Standard: 100%
+        }
+        
+        const bgString = beschaeftigungsgradInput.value.trim();
+        
+        if (!bgString) {
+            return 1.0; // Standard: 100%
+        }
+        
+        if (bgString.includes('%')) {
+            const value = parseFloat(bgString.replace('%', ''));
+            return isNaN(value) ? 1.0 : value / 100;
+        } else {
+            const bgValue = parseFloat(bgString);
+            if (isNaN(bgValue)) {
+                return 1.0; // Standard: 100%
+            }
+            if (bgValue > 1) {
+                return bgValue / 100; // 80 -> 0.8
+            } else {
+                return bgValue; // 0.8 -> 0.8
+            }
+        }
+    } catch (error) {
+        return 1.0; // Standard: 100%
+    }
+}
+
+// Hilfsfunktion: Berechne tägliche Arbeitsstunden für Urlaub
+function berechneTaeglicheUrlaubsstunden() {
+    const beschaeftigungsgrad = getBeschaeftigungsgrad();
+    const tagesStunden = (wochenstunden * beschaeftigungsgrad) / 5;
+    return tagesStunden;
+}
+
+
+// Urlaubstage aus LocalStorage laden
+function ladeUrlaubstage() {
+    // MIGRATION: Lösche alte Urlaubsperioden aus LocalStorage
+    // Das neue System verwendet urlaub_tage_* Einträge
+    const gespeichert = localStorage.getItem('urlaubstage');
+    if (gespeichert) {
+        localStorage.removeItem('urlaubstage');
+    }
+    
+    // Array bleibt leer - wird nicht mehr verwendet
+    urlaubstage = [];
+    
+    // Aktualisiere Liste nur wenn Modal-Elemente existieren
+    if (document.getElementById('urlaubsliste')) {
+        aktualisiereUrlaubsliste();
+    }
+}
+
+// Urlaubstage in LocalStorage speichern (DEPRECATED - wird nicht mehr verwendet)
+function speichereUrlaubstage() {
+    // Nichts tun - das neue System verwendet urlaub_tage_* Einträge
+}
+// Berechne Urlaubstage basierend auf eingetragenen Stunden
+function berechneUrlaubstageAusStunden(stunden) {
+    const tagesStunden = berechneTaeglicheUrlaubsstunden();
+    if (tagesStunden === 0) return 0;
+    
+    // Berechne Anteil: eingetragene Stunden / Tagesstunden
+    const anteil = stunden / tagesStunden;
+    
+    // Runde auf 0.5 Schritte
+    return Math.round(anteil * 2) / 2;
+}
+
+// Hilfsfunktion: Formatiere Datum als YYYY-MM-DD in lokaler Zeitzone
+function formatiereDatumLokal(datum) {
+    const jahr = datum.getFullYear();
+    const monat = String(datum.getMonth() + 1).padStart(2, '0');
+    const tag = String(datum.getDate()).padStart(2, '0');
+    return `${jahr}-${monat}-${tag}`;
+}
+
+// Speichere oder aktualisiere Urlaubstage für ein bestimmtes Datum
+function aktualisiereUrlaubstageProTag(datum, urlaubstage) {
+    const datumString = formatiereDatumLokal(datum);
+    const key = `urlaub_tage_${datumString}`;
+    
+    if (urlaubstage > 0) {
+        localStorage.setItem(key, urlaubstage.toString());
+    } else {
+        localStorage.removeItem(key);
+    }
+    
+    // Aktualisiere Urlaubskalender-Anzeige
+    aktualisiereUrlaubskalenderBadge();
+    
+    // Aktualisiere auch die Urlaubsliste (für nachträgliche Änderungen)
+    if (document.getElementById('urlaubsliste')) {
+        aktualisiereUrlaubsliste();
+    }
+}
+
+// Lade Urlaubstage für ein bestimmtes Datum
+function ladeUrlaubstageProTag(datum) {
+    const datumString = formatiereDatumLokal(datum);
+    const key = `urlaub_tage_${datumString}`;
+    const gespeichert = localStorage.getItem(key);
+    
+    return gespeichert ? parseFloat(gespeichert) : 0;
+}
+
+// Aktualisiere Urlaubskalender-Badge mit Gesamtsumme
+function aktualisiereUrlaubskalenderBadge() {
+    let gesamtTage = 0;
+    
+    // Summiere alle gespeicherten Urlaubstage
+    for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('urlaub_tage_')) {
+            const tage = parseFloat(localStorage.getItem(key));
+            if (!isNaN(tage)) {
+                gesamtTage += tage;
+            }
+        }
+    }
+    
+    // Lade Urlaubstage pro Jahr aus Stammdaten
+    const stammdaten = JSON.parse(localStorage.getItem('stammdaten') || '{}');
+    const urlaubstageProJahr = parseFloat(stammdaten.urlaubstageProJahr) || 0;
+    
+    // Berechne verbleibende Tage
+    const verbleibendeTage = urlaubstageProJahr - gesamtTage;
+    
+    // Aktualisiere Badge
+    const badge = document.getElementById('urlaubstageGesamt');
+    const badgeMobile = document.getElementById('urlaubstageGesamtMobile');
+    
+    if (urlaubstageProJahr > 0) {
+        // Zeige gebraucht / verfügbar
+        const badgeText = `${gesamtTage} / ${urlaubstageProJahr} Tage (${verbleibendeTage} frei)`;
+        if (badge) badge.textContent = badgeText;
+        if (badgeMobile) badgeMobile.textContent = badgeText;
+    } else {
+        // Nur gebrauchte Tage anzeigen
+        if (badge) badge.textContent = `${gesamtTage} Tage`;
+        if (badgeMobile) badgeMobile.textContent = `${gesamtTage} Tage`;
+    }
+}
+
+
+// Prüfe ob ein Datum ein Urlaubstag ist
+function istUrlaubstag(datum) {
+    // Prüfe direkt in LocalStorage ob Urlaubstage für dieses Datum gespeichert sind
+    const urlaubstage = ladeUrlaubstageProTag(datum);
+    return urlaubstage > 0;
+}
+
+// Berechne Anzahl Urlaubstage (ohne Wochenenden und Feiertage)
+function berechneUrlaubstage(vonDate, bisDate) {
+    let tage = 0;
+    const current = new Date(vonDate);
+    
+    while (current <= bisDate) {
+        const wochentag = current.getDay();
+        
+        // Prüfe ob Feiertag (wenn Feature aktiviert)
+        let istFeiertagHeute = false;
+        if (FEATURES.FEIERTAGE_LADEN) {
+            const jahr = current.getFullYear();
+            const monat = current.getMonth();
+            const tag = current.getDate();
+            const cacheKey = `${jahr}-${bundesland}`;
+            
+            if (feiertageCache[cacheKey]) {
+                const monatString = String(monat + 1).padStart(2, '0');
+                const tagString = String(tag).padStart(2, '0');
+                const datumString = `${jahr}-${monatString}-${tagString}`;
+                istFeiertagHeute = feiertageCache[cacheKey].has(datumString);
+            }
+        }
+        
+        // Zähle nur Werktage (Mo-Fr) die keine Feiertage sind
+        if (wochentag !== 0 && wochentag !== 6 && !istFeiertagHeute) {
+            tage++;
+        }
+        current.setDate(current.getDate() + 1);
+    }
+    
+    return tage;
+}
+
+// Aktualisiere Urlaubsliste in der UI
+function aktualisiereUrlaubsliste() {
+    // Desktop-Liste
+    const desktopListe = document.getElementById('urlaubsliste');
+    
+    if (!desktopListe) return; // Element existiert noch nicht
+    
+    // Sammle alle Tage mit Urlaubsstunden aus LocalStorage
+    const urlaubstageMap = new Map(); // datum -> tage
+    for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('urlaub_tage_')) {
+            const datumString = key.replace('urlaub_tage_', '');
+            const tage = parseFloat(localStorage.getItem(key));
+            if (!isNaN(tage) && tage > 0) {
+                urlaubstageMap.set(datumString, tage);
+            }
+        }
+    }
+    
+    if (urlaubstageMap.size === 0 && urlaubstage.length === 0) {
+        const leerHTML = `
+            <div class="text-muted text-center py-3">
+                <i class="bi bi-calendar-x" style="font-size: 2rem;"></i>
+                <p class="mb-0 mt-2">Noch keine Urlaubstage geplant</p>
+            </div>
+        `;
+        desktopListe.innerHTML = leerHTML;
+        return;
+    }
+    
+    // Erstelle Liste aus gespeicherten Urlaubstagen
+    const urlaubseintraege = [];
+    
+    // Sortiere Daten
+    const sortierteDaten = Array.from(urlaubstageMap.keys()).sort();
+    
+    // Gruppiere aufeinanderfolgende ARBEITSTAGE (überspringt Wochenenden/Feiertage)
+    let aktuelleGruppe = null;
+    sortierteDaten.forEach(datumString => {
+        const tage = urlaubstageMap.get(datumString);
+        const datum = new Date(datumString + 'T12:00:00'); // Mittag um Zeitzone zu vermeiden
+        
+        if (!aktuelleGruppe) {
+            // Neue Gruppe starten
+            aktuelleGruppe = {
+                von: datumString,
+                bis: datumString,
+                tage: tage
+            };
+        } else {
+            // Prüfe ob aufeinanderfolgend (unter Berücksichtigung von Wochenenden/Feiertagen)
+            const letztesDatum = new Date(aktuelleGruppe.bis + 'T12:00:00');
+            const diffTage = Math.round((datum - letztesDatum) / (1000 * 60 * 60 * 24));
+            
+            // Prüfe ob die Tage dazwischen nur Wochenenden/Feiertage sind
+            let nurWochenendenDazwischen = true;
+            if (diffTage > 1) {
+                for (let i = 1; i < diffTage; i++) {
+                    const zwischenDatum = new Date(letztesDatum);
+                    zwischenDatum.setDate(zwischenDatum.getDate() + i);
+                    const wochentag = zwischenDatum.getDay();
+                    const istWochenende = (wochentag === 0 || wochentag === 6);
+                    const istFeiertag = istDatumFeiertag(zwischenDatum);
+                    
+                    // Wenn ein Tag dazwischen kein Wochenende und kein Feiertag ist,
+                    // dann ist es eine Lücke in den Urlaubstagen
+                    if (!istWochenende && !istFeiertag) {
+                        nurWochenendenDazwischen = false;
+                        break;
+                    }
+                }
+            }
+            
+            if (diffTage === 1 || (diffTage > 1 && nurWochenendenDazwischen)) {
+                // Erweitere Gruppe (direkt aufeinanderfolgend oder nur Wochenenden/Feiertage dazwischen)
+                aktuelleGruppe.bis = datumString;
+                aktuelleGruppe.tage += tage;
+            } else {
+                // Speichere alte Gruppe und starte neue (echte Lücke in Urlaubstagen)
+                urlaubseintraege.push(aktuelleGruppe);
+                aktuelleGruppe = {
+                    von: datumString,
+                    bis: datumString,
+                    tage: tage
+                };
+            }
+        }
+    });
+    
+    // Letzte Gruppe hinzufügen
+    if (aktuelleGruppe) {
+        urlaubseintraege.push(aktuelleGruppe);
+    }
+    
+    // Erstelle HTML für Liste
+    let html = '';
+    urlaubseintraege.forEach((eintrag, index) => {
+        const vonDate = new Date(eintrag.von + 'T12:00:00');
+        const bisDate = new Date(eintrag.bis + 'T12:00:00');
+        
+        const vonFormatiert = vonDate.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+        const bisFormatiert = bisDate.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+        
+        // Zeige tatsächliche Urlaubstage mit besserer Formatierung
+
+        let tageAnzeige;
+        if (eintrag.tage === 1) {
+            tageAnzeige = '1 Tag';
+        } else if (eintrag.tage === 0.5) {
+            tageAnzeige = '0.5 Tage (halber Tag)';
+        } else if (eintrag.tage % 1 === 0) {
+            tageAnzeige = `${eintrag.tage} Tage`;
+        } else {
+            // Zeige Dezimalzahl für halbe Tage
+            tageAnzeige = `${eintrag.tage} Tage`;
+        }
+        
+        html += `
+            <div class="list-group-item d-flex justify-content-between align-items-center">
+                <div>
+                    <i class="bi bi-calendar-event text-success"></i>
+                    <strong>${vonFormatiert}</strong> bis <strong>${bisFormatiert}</strong>
+                    <span class="badge bg-success ms-2">${tageAnzeige}</span>
+                </div>
+                <button class="btn btn-sm btn-outline-danger" onclick="loescheUrlaubseintraege('${eintrag.von}', '${eintrag.bis}')">
+                    <i class="bi bi-trash"></i>
+                </button>
+            </div>
+        `;
+    });
+    
+    desktopListe.innerHTML = html;
+}
+
+// Urlaubsperiode hinzufügen
+function fuegeUrlaubHinzu(von, bis, isMobile = false) {
+    if (!von || !bis) {
+        zeigeToast('Bitte beide Daten auswählen', 'warning');
+        return;
+    }
+    
+    const vonDate = new Date(von + 'T12:00:00'); // Mittag um Zeitzone zu vermeiden
+    const bisDate = new Date(bis + 'T12:00:00');
+    
+    if (vonDate > bisDate) {
+        zeigeToast('Start-Datum muss vor End-Datum liegen', 'warning');
+        return;
+    }
+    
+    // Erstelle urlaub_tage_* Einträge für jeden Arbeitstag in der Periode
+    const current = new Date(vonDate);
+    let urlaubstageGesamt = 0;
+    
+    while (current <= bisDate) {
+        const wochentag = current.getDay();
+        const istWochenende = (wochentag === 0 || wochentag === 6);
+        const istFeiertag = istDatumFeiertag(current);
+        
+        // Nur Werktage (Mo-Fr) die keine Feiertage sind
+        if (!istWochenende && !istFeiertag) {
+            aktualisiereUrlaubstageProTag(current, 1.0);
+            urlaubstageGesamt++;
+        }
+        
+        current.setDate(current.getDate() + 1);
+    }
+    
+    // Eingabefelder leeren
+    document.getElementById('urlaubVon').value = '';
+    document.getElementById('urlaubBis').value = '';
+    
+    // Aktualisiere Listen
+    aktualisiereUrlaubsliste();
+    aktualisiereUrlaubskalenderBadge();
+    
+    zeigeToast(`Urlaub hinzugefügt: ${urlaubstageGesamt} Tag(e)`, 'success');
+    
+    // Aktualisiere Monatsansicht wenn im aktuellen Monat
+    const aktuellerMonatStart = new Date(aktuellesJahr, aktuellerMonat, 1);
+    const aktuellerMonatEnde = new Date(aktuellesJahr, aktuellerMonat + 1, 0);
+    
+    if ((vonDate <= aktuellerMonatEnde && bisDate >= aktuellerMonatStart)) {
+        ladeMonat(aktuellesJahr, aktuellerMonat);
+    }
+}
+
+// Füge einen einzelnen Urlaubstag automatisch hinzu (wenn manuell "Urlaub" eingetragen wird)
+function fuegeUrlaubstagAutomatischHinzu(tag) {
+    // Erstelle Datum für diesen Tag (ohne Zeitzone-Probleme)
+    const datum = new Date(aktuellesJahr, aktuellerMonat, tag);
+    
+    // Prüfe ob bereits Urlaubstage für diesen Tag gespeichert sind
+    const vorhandeneUrlaubstage = ladeUrlaubstageProTag(datum);
+    
+    // Nur überschreiben wenn noch keine Urlaubstage gespeichert sind
+    // oder wenn es 0 ist (gelöscht wurde)
+    if (vorhandeneUrlaubstage === null || vorhandeneUrlaubstage === 0) {
+        // Speichere 1 ganzen Urlaubstag für diesen Tag
+        aktualisiereUrlaubstageProTag(datum, 1.0);
+        
+        // Aktualisiere Listen
+        aktualisiereUrlaubsliste();
+        zeigeToast('Urlaubstag automatisch hinzugefügt', 'success');
+    } else {
+        // Bereits Urlaubstage vorhanden - nicht überschreiben
+        zeigeToast(`Urlaubstag bereits vorhanden (${vorhandeneUrlaubstage} Tage)`, 'info');
+    }
+    
+    // Aktualisiere die Zeile/Card visuell
+    ladeMonat(aktuellesJahr, aktuellerMonat);
+}
+
+// Lösche Urlaubseinträge für einen Datumsbereich
+function loescheUrlaubseintraege(von, bis) {
+    const vonDate = new Date(von + 'T12:00:00');
+    const bisDate = new Date(bis + 'T12:00:00');
+    const current = new Date(vonDate);
+    
+    // Lösche alle Urlaubstage in diesem Bereich
+    while (current <= bisDate) {
+        const datumString = formatiereDatumLokal(current);
+        const key = `urlaub_tage_${datumString}`;
+        localStorage.removeItem(key);
+        
+        // Lösche auch gespeicherte Zeitdaten für diesen Tag
+        const tag = current.getDate();
+        const monat = current.getMonth();
+        const jahr = current.getFullYear();
+        const monatsKey = getMonatsKey(jahr, monat);
+        
+        if (zeiterfassungDaten[monatsKey] && zeiterfassungDaten[monatsKey].tage && zeiterfassungDaten[monatsKey].tage[tag]) {
+            delete zeiterfassungDaten[monatsKey].tage[tag];
+        }
+        
+        current.setDate(current.getDate() + 1);
+    }
+    
+    // Speichere Änderungen
+    speichereDatenInLocalStorage();
+    
+    // Aktualisiere Anzeige
+    aktualisiereUrlaubsliste();
+    aktualisiereUrlaubskalenderBadge();
+    zeigeToast('Urlaubstage gelöscht', 'info');
+    
+    // Aktualisiere Monatsansicht
+    ladeMonat(aktuellesJahr, aktuellerMonat);
+}
+
+
+// Event Listener für Urlaubskalender initialisieren
+function initUrlaubskalenderEvents() {
+    // Desktop
+    const btnUrlaubHinzufuegen = document.getElementById('btnUrlaubHinzufuegen');
+    if (btnUrlaubHinzufuegen) {
+        btnUrlaubHinzufuegen.addEventListener('click', function() {
+            const von = document.getElementById('urlaubVon').value;
+            const bis = document.getElementById('urlaubBis').value;
+            fuegeUrlaubHinzu(von, bis, false);
+        });
+    }
+}
+// Event Listener für Optimierungs-Buttons
+function initUrlaubsOptimierungEvents() {
+    const btnOptimieren = document.getElementById('btnUrlaubOptimieren');
+    if (btnOptimieren) {
+        btnOptimieren.addEventListener('click', optimiereUrlaub);
+    }
+    
+    const btnOptimierenMobile = document.getElementById('btnUrlaubOptimierenMobile');
+    if (btnOptimierenMobile) {
+        btnOptimierenMobile.addEventListener('click', optimiereUrlaub);
+    }
+}
+
+// Urlaubsoptimierung
+async function optimiereUrlaub() {
+    const jahr = parseInt(document.getElementById('jahrSelect').value);
+    
+    // Lade Feiertage für das Jahr
+    let feiertage = new Set();
+    if (FEATURES.FEIERTAGE_LADEN) {
+        try {
+            feiertage = await ladeFeiertage(jahr);
+        } catch (error) {
+            zeigeToast('Feiertage konnten nicht geladen werden', 'warning');
+            return;
+        }
+    }
+    
+    if (feiertage.size === 0) {
+        zeigeToast('Keine Feiertage verfügbar für Optimierung', 'warning');
+        return;
+    }
+    
+    // Finde alle Brückentage und optimale Perioden
+    const optimierungen = findeOptimaleUrlaubsperioden(jahr, feiertage);
+    
+    // Zeige Ergebnisse im Modal
+    zeigeOptimierungsErgebnisse(jahr, optimierungen);
+}
+
+// Hilfsfunktion: Prüfe ob ein Datum ein Feiertag ist
+function istDatumFeiertag(datum, feiertage = null) {
+    const datumString = formatDatum(datum);
+    
+    // Wenn kein feiertage-Parameter übergeben wurde, verwende den Cache
+    if (!feiertage) {
+        const jahr = datum.getFullYear();
+        const cacheKey = `${jahr}-${bundesland}`;
+        
+        if (feiertageCache[cacheKey]) {
+            return feiertageCache[cacheKey].has(datumString);
+        }
+        return false; // Kein Cache vorhanden
+    }
+    
+    return feiertage.has(datumString);
+}
+
+// Finde optimale Urlaubsperioden basierend auf Feiertagen
+function findeOptimaleUrlaubsperioden(jahr, feiertage) {
+    const perioden = [];
+    
+    // Konvertiere Set zu Array für einfachere Verarbeitung
+    const feiertagsArray = Array.from(feiertage.entries()).map(([datum, name]) => ({
+        datum: new Date(datum),
+        name: name,
+        datumString: datum
+    })).sort((a, b) => a.datum - b.datum);
+    
+    // Analysiere jeden Feiertag
+    feiertagsArray.forEach(feiertag => {
+        const datum = feiertag.datum;
+        const wochentag = datum.getDay();
+        
+        // Überspringe Wochenend-Feiertage
+        if (wochentag === 0 || wochentag === 6) {
+            return;
+        }
+        
+        // Brückentag-Szenarien
+        let vorschlag = null;
+        
+        // Montag oder Freitag = 4 Tage frei mit 1 Urlaubstag
+        if (wochentag === 1) { // Montag
+            const freitagDavor = addDays(datum, -3);
+            // Prüfe ob Freitag davor auch ein Feiertag ist
+            if (!istDatumFeiertag(freitagDavor, feiertage)) {
+                vorschlag = {
+                    typ: 'Langes Wochenende',
+                    feiertag: feiertag.name,
+                    feiertagDatum: feiertag.datumString,
+                    urlaubstage: 1,
+                    freieTage: 4,
+                    von: formatDatum(freitagDavor),
+                    bis: formatDatum(freitagDavor),
+                    beschreibung: `1 Urlaubstag am Freitag → 4 Tage frei (Fr-Mo)`
+                };
+            }
+        } else if (wochentag === 5) { // Freitag
+            const montagDanach = addDays(datum, 3);
+            // Prüfe ob Montag danach auch ein Feiertag ist
+            if (!istDatumFeiertag(montagDanach, feiertage)) {
+                vorschlag = {
+                    typ: 'Langes Wochenende',
+                    feiertag: feiertag.name,
+                    feiertagDatum: feiertag.datumString,
+                    urlaubstage: 1,
+                    freieTage: 4,
+                    von: formatDatum(montagDanach),
+                    bis: formatDatum(montagDanach),
+                    beschreibung: `1 Urlaubstag am Montag → 4 Tage frei (Fr-Mo)`
+                };
+            }
+        }
+        // Dienstag = 4 Tage frei mit 1 Urlaubstag
+        else if (wochentag === 2) { // Dienstag
+            const montagDavor = addDays(datum, -1);
+            // Prüfe ob Montag davor auch ein Feiertag ist
+            if (!istDatumFeiertag(montagDavor, feiertage)) {
+                vorschlag = {
+                    typ: 'Brückentag',
+                    feiertag: feiertag.name,
+                    feiertagDatum: feiertag.datumString,
+                    urlaubstage: 1,
+                    freieTage: 4,
+                    von: formatDatum(montagDavor),
+                    bis: formatDatum(montagDavor),
+                    beschreibung: `1 Urlaubstag am Montag → 4 Tage frei (Sa-Di)`
+                };
+            }
+        }
+        // Donnerstag = 4 Tage frei mit 1 Urlaubstag
+        else if (wochentag === 4) { // Donnerstag
+            const freitagDanach = addDays(datum, 1);
+            // Prüfe ob Freitag danach auch ein Feiertag ist
+            if (!istDatumFeiertag(freitagDanach, feiertage)) {
+                vorschlag = {
+                    typ: 'Brückentag',
+                    feiertag: feiertag.name,
+                    feiertagDatum: feiertag.datumString,
+                    urlaubstage: 1,
+                    freieTage: 4,
+                    von: formatDatum(freitagDanach),
+                    bis: formatDatum(freitagDanach),
+                    beschreibung: `1 Urlaubstag am Freitag → 4 Tage frei (Do-So)`
+                };
+            }
+        }
+        // Mittwoch = 5 Tage frei mit 2 Urlaubstagen
+        else if (wochentag === 3) { // Mittwoch
+            const dienstagDavor = addDays(datum, -1);
+            const donnerstagDanach = addDays(datum, 1);
+            // Prüfe ob Dienstag oder Donnerstag auch Feiertage sind
+            if (!istDatumFeiertag(dienstagDavor, feiertage) && !istDatumFeiertag(donnerstagDanach, feiertage)) {
+                vorschlag = {
+                    typ: 'Brückentage',
+                    feiertag: feiertag.name,
+                    feiertagDatum: feiertag.datumString,
+                    urlaubstage: 2,
+                    freieTage: 5,
+                    von: formatDatum(dienstagDavor),
+                    bis: formatDatum(donnerstagDanach),
+                    beschreibung: `2 Urlaubstage (Di+Do) → 5 Tage frei (Sa-Mi)`
+                };
+            }
+        }
+        
+        if (vorschlag) {
+            perioden.push(vorschlag);
+        }
+    });
+    
+    // Finde aufeinanderfolgende Feiertage für längere Perioden
+    for (let i = 0; i < feiertagsArray.length - 1; i++) {
+        const feiertag1 = feiertagsArray[i];
+        const feiertag2 = feiertagsArray[i + 1];
+        
+        const diff = Math.floor((feiertag2.datum - feiertag1.datum) / (1000 * 60 * 60 * 24));
+        
+        // Wenn Feiertage 2-5 Tage auseinander liegen
+        if (diff >= 2 && diff <= 5) {
+            const urlaubstage = berechneBenoetigteUrlaubstage(feiertag1.datum, feiertag2.datum);
+            const freieTage = berechneFreieTage(feiertag1.datum, feiertag2.datum);
+            
+            if (urlaubstage > 0 && freieTage > urlaubstage + 2) {
+                perioden.push({
+                    typ: 'Feiertags-Kombination',
+                    feiertag: `${feiertag1.name} + ${feiertag2.name}`,
+                    feiertagDatum: feiertag1.datumString,
+                    urlaubstage: urlaubstage,
+                    freieTage: freieTage,
+                    von: formatDatum(feiertag1.datum),
+                    bis: formatDatum(feiertag2.datum),
+                    beschreibung: `${urlaubstage} Urlaubstage → ${freieTage} Tage frei`
+                });
+            }
+        }
+    }
+    
+    // Sortiere nach Effizienz (freie Tage pro Urlaubstag)
+    perioden.sort((a, b) => {
+        const effA = a.freieTage / a.urlaubstage;
+        const effB = b.freieTage / b.urlaubstage;
+        return effB - effA;
+    });
+    
+    return perioden;
+}
+
+// Berechne benötigte Urlaubstage zwischen zwei Daten
+function berechneBenoetigteUrlaubstage(von, bis) {
+    let tage = 0;
+    const current = new Date(von);
+    current.setDate(current.getDate() + 1); // Start am Tag nach dem ersten Feiertag
+    
+    const bisDate = new Date(bis);
+    bisDate.setDate(bisDate.getDate() - 1); // Ende am Tag vor dem zweiten Feiertag
+    
+    while (current <= bisDate) {
+        const wochentag = current.getDay();
+        if (wochentag !== 0 && wochentag !== 6) {
+            tage++;
+        }
+        current.setDate(current.getDate() + 1);
+    }
+    
+    return tage;
+}
+
+// Berechne gesamte freie Tage zwischen zwei Daten
+function berechneFreieTage(von, bis) {
+    const diff = Math.floor((bis - von) / (1000 * 60 * 60 * 24));
+    return diff + 1;
+}
+
+// Hilfsfunktion: Tage zu Datum addieren
+function addDays(date, days) {
+    const result = new Date(date);
+    result.setDate(result.getDate() + days);
+    return result;
+}
+
+// Hilfsfunktion: Datum formatieren
+function formatDatum(date) {
+    const jahr = date.getFullYear();
+    const monat = String(date.getMonth() + 1).padStart(2, '0');
+    const tag = String(date.getDate()).padStart(2, '0');
+    return `${jahr}-${monat}-${tag}`;
+}
+
+// Zeige Optimierungsergebnisse im Modal
+function zeigeOptimierungsErgebnisse(jahr, perioden) {
+    document.getElementById('optimierungJahr').textContent = jahr;
+    const container = document.getElementById('optimierungErgebnisse');
+    
+    if (perioden.length === 0) {
+        container.innerHTML = `
+            <div class="alert alert-warning">
+                <i class="bi bi-exclamation-triangle"></i>
+                Keine optimalen Urlaubsperioden gefunden.
+            </div>
+        `;
+    } else {
+        let html = '<div class="list-group">';
+        
+        perioden.forEach((periode, index) => {
+            const effizienz = (periode.freieTage / periode.urlaubstage).toFixed(1);
+            const vonFormatiert = new Date(periode.von).toLocaleDateString('de-DE', { day: '2-digit', month: 'short' });
+            const bisFormatiert = new Date(periode.bis).toLocaleDateString('de-DE', { day: '2-digit', month: 'short' });
+            
+            html += `
+                <div class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-start mb-2">
+                        <div>
+                            <h6 class="mb-1">
+                                <span class="badge bg-info">#${index + 1}</span>
+                                ${periode.typ}
+                            </h6>
+                            <p class="mb-1"><strong>${periode.feiertag}</strong></p>
+                            <p class="mb-1 text-muted small">${periode.beschreibung}</p>
+                        </div>
+                        <div class="text-end">
+                            <span class="badge bg-success" style="font-size: 1rem;">
+                                ${effizienz}x Effizienz
+                            </span>
+                        </div>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <span class="badge bg-primary">${periode.urlaubstage} Urlaubstag(e)</span>
+                            <span class="badge bg-success">${periode.freieTage} freie Tage</span>
+                        </div>
+                        <button class="btn btn-sm btn-outline-success" onclick="uebernehmePeriode('${periode.von}', '${periode.bis}')">
+                            <i class="bi bi-plus-circle"></i> Übernehmen
+                        </button>
+                    </div>
+                </div>
+            `;
+        });
+        
+        html += '</div>';
+        container.innerHTML = html;
+    }
+    
+    // Zeige Modal
+    const modal = new bootstrap.Modal(document.getElementById('urlaubOptimierungModal'));
+    modal.show();
+}
+
+// Übernehme Periode in Urlaubskalender
+function uebernehmePeriode(von, bis) {
+    // Schließe Modal
+    const modal = bootstrap.Modal.getInstance(document.getElementById('urlaubOptimierungModal'));
+    modal.hide();
+    
+    // Füge Urlaub hinzu
+    const vonDate = new Date(von);
+    const bisDate = new Date(bis);
+    
+    fuegeUrlaubHinzu(von, bis, false);
+}
+
 
 // ===================================
 // Initialisierung
@@ -47,11 +829,33 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Daten aus LocalStorage laden
     ladeDatenAusLocalStorage();
     
-    // Stammdaten laden
+    // WICHTIG: Wochenstunden ZUERST laden, bevor Stammdaten geladen werden
+    // Dies stellt sicher, dass wochenstunden gesetzt ist, bevor der Monat geladen wird
+    const gespeicherteWochenstunden = localStorage.getItem('wochenstunden');
+    if (gespeicherteWochenstunden) {
+        const parts = gespeicherteWochenstunden.split(':');
+        const stunden = parseInt(parts[0]);
+        const minuten = parseInt(parts[1]);
+        wochenstunden = stunden + (minuten / 60);
+    }
+    
+    // Stammdaten laden (lädt auch Wochenstunden, aber wochenstunden ist bereits gesetzt)
     ladeStammdaten();
+    
+    // Urlaubstage laden
+    ladeUrlaubstage();
+    
+    // Urlaubskalender-Badge initialisieren
+    aktualisiereUrlaubskalenderBadge();
     
     // Event Listener initialisieren
     initEventListeners();
+    
+    // Urlaubskalender Events initialisieren
+    initUrlaubskalenderEvents();
+    
+    // Urlaubsoptimierung Events initialisieren
+    initUrlaubsOptimierungEvents();
     
     // Monat laden
     await ladeMonat(aktuellesJahr, aktuellerMonat);
@@ -94,6 +898,25 @@ function initEventListeners() {
     document.getElementById('beschaeftigungsgrad').addEventListener('change', function() {
         speichereStammdaten();
         berechneSollStundenAutomatisch();
+    });
+    document.getElementById('urlaubstageProJahr').addEventListener('change', function() {
+        speichereStammdaten();
+        aktualisiereUrlaubskalenderBadge();
+    });
+    
+    // Urlaubskalender Buttons
+    document.getElementById('btnUrlaubskalender')?.addEventListener('click', function() {
+        const modal = new bootstrap.Modal(document.getElementById('urlaubskalenderModal'));
+        modal.show();
+    });
+    
+    document.getElementById('btnMobileUrlaubskalender')?.addEventListener('click', function() {
+        const modal = new bootstrap.Modal(document.getElementById('urlaubskalenderModal'));
+        modal.show();
+        // Menü schließen
+        const mobileMenu = document.getElementById('mobileMenu');
+        const bsCollapse = new bootstrap.Collapse(mobileMenu, { toggle: false });
+        bsCollapse.hide();
     });
     
     // Bundesland-Auswahl (Desktop und Mobile)
@@ -253,10 +1076,90 @@ function initEventListeners() {
         // Prüfe ob das Element ein time-input ist
         if (e.target && e.target.classList && e.target.classList.contains('time-input')) {
             const field = e.target.dataset.field;
+            const originalValue = e.target.value;
             
-            // Nur für Zeitfelder normalisieren (nicht für berechnete Felder)
-            if (field && field !== 'stunden' && field !== 'gesamt') {
-                const originalValue = e.target.value;
+            // Prüfe ob "Urlaub" im Von1-Feld eingetragen wurde (VOR der Normalisierung!)
+            if (field === 'von1') {
+                const row = e.target.closest('tr') || e.target.closest('.day-card');
+                if (row && row.dataset && row.dataset.tag) {
+                    const tag = parseInt(row.dataset.tag);
+                    const datum = new Date(aktuellesJahr, aktuellerMonat, tag);
+                    const urlaubCheck = originalValue.trim().toLowerCase();
+                    
+                    if (urlaubCheck === 'urlaub') {
+                        // "Urlaub" eingegeben - füge Urlaubstag hinzu
+                        fuegeUrlaubstagAutomatischHinzu(tag);
+                        return; // Keine weitere Verarbeitung nötig
+                    } else {
+                        // "Urlaub" wurde gelöscht oder anderer Text - prüfe ob Urlaubstag gespeichert ist
+                        const vorhandeneUrlaubstage = ladeUrlaubstageProTag(datum);
+                        if (vorhandeneUrlaubstage > 0) {
+                            // Urlaubstag war gespeichert, aber "Urlaub" wurde entfernt - lösche ihn
+                            const datumKey = `${datum.getFullYear()}-${String(datum.getMonth() + 1).padStart(2, '0')}-${String(datum.getDate()).padStart(2, '0')}`;
+                            localStorage.removeItem(`urlaub_tage_${datumKey}`);
+                            
+                            // Lösche auch die gespeicherten Zeitdaten für diesen Tag
+                            const monatsKey = getMonatsKey(aktuellesJahr, aktuellerMonat);
+                            if (zeiterfassungDaten[monatsKey] && zeiterfassungDaten[monatsKey].tage && zeiterfassungDaten[monatsKey].tage[tag]) {
+                                delete zeiterfassungDaten[monatsKey].tage[tag];
+                                speichereDatenInLocalStorage();
+                            }
+                            
+                            // Aktualisiere Listen und Monatsansicht
+                            aktualisiereUrlaubsliste();
+                            aktualisiereUrlaubskalenderBadge();
+                            ladeMonat(aktuellesJahr, aktuellerMonat);
+                            
+                            return; // Keine weitere Verarbeitung nach Löschung
+                        }
+                    }
+                }
+            }
+            
+            // Wenn Stunden-Feld manuell geändert wurde, berechne Urlaubstage
+            if (field === 'stunden') {
+                const row = e.target.closest('tr') || e.target.closest('.day-card');
+                if (row && row.dataset && row.dataset.tag) {
+                    const tag = parseInt(row.dataset.tag);
+                    const datum = new Date(aktuellesJahr, aktuellerMonat, tag);
+                    
+                    // Prüfe ob dieser Tag ein Urlaubstag ist
+                    if (istUrlaubstag(datum)) {
+                        // Parse Stunden
+                        const stundenValue = originalValue.trim();
+                        
+                        // Wenn Stunden leer oder 0:00, lösche Urlaubstag
+                        if (!stundenValue || stundenValue === 'XXXXX' || stundenValue === '0:00' || stundenValue === '0') {
+                            // Lösche Urlaubstag aus LocalStorage
+                            const datumKey = `${datum.getFullYear()}-${String(datum.getMonth() + 1).padStart(2, '0')}-${String(datum.getDate()).padStart(2, '0')}`;
+                            localStorage.removeItem(`urlaub_tage_${datumKey}`);
+
+                            // Aktualisiere Listen und Monatsansicht
+                            aktualisiereUrlaubsliste();
+                            aktualisiereUrlaubskalenderBadge();
+                            ladeMonat(aktuellesJahr, aktuellerMonat);
+                        } else {
+                            // Stunden vorhanden - berechne und speichere Urlaubstage
+                            const parts = stundenValue.split(':');
+                            if (parts.length === 2) {
+                                const stunden = parseInt(parts[0]) || 0;
+                                const minuten = parseInt(parts[1]) || 0;
+                                const gesamtStunden = stunden + (minuten / 60);
+                                
+                                // Berechne Urlaubstage basierend auf Stunden
+                                const urlaubstage = berechneUrlaubstageAusStunden(gesamtStunden);
+                                
+                                // Speichere Urlaubstage für diesen Tag
+                                aktualisiereUrlaubstageProTag(datum, urlaubstage);
+                                
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Nur für Zeitfelder normalisieren (nicht für berechnete Felder und nicht für "Urlaub")
+            if (field && field !== 'stunden' && field !== 'gesamt' && originalValue.toLowerCase() !== 'urlaub') {
                 const normalizedValue = normalisiereZeitEingabe(originalValue);
                 
                 // Wenn sich der Wert geändert hat, aktualisiere das Feld
@@ -445,15 +1348,16 @@ async function ladeMonat(jahr, monat) {
         const wochentag = WOCHENTAGE[datum.getDay()];
         const istWochenende = (datum.getDay() === 0 || datum.getDay() === 6);
         const feiertagName = istFeiertag(jahr, monat, tag, feiertage);
+        const istUrlaub = istUrlaubstag(datum);
         
         // Wochenende ODER Feiertag
         const istFreierTag = istWochenende || (feiertagName !== null);
         
         // Desktop: Tabellenzeile erstellen
-        erstelleZeile(tag, wochentag, istFreierTag, feiertagName);
+        erstelleZeile(tag, wochentag, istFreierTag, feiertagName, istUrlaub);
         
         // Mobile: Card erstellen
-        erstelleMobileCard(tag, wochentag, istFreierTag, feiertagName);
+        erstelleMobileCard(tag, wochentag, istFreierTag, feiertagName, istUrlaub);
     }
     
     
@@ -942,16 +1846,21 @@ function macheStundenFelderEditierbar() {
 // ===================================
 // Zeile erstellen (Desktop Tabelle)
 // ===================================
-function erstelleZeile(tag, wochentag, istWochenende, feiertagName = null) {
+function erstelleZeile(tag, wochentag, istWochenende, feiertagName = null, istUrlaub = false) {
     const tbody = document.getElementById('zeiterfassungBody');
     const tr = document.createElement('tr');
     tr.className = istWochenende ? 'weekend-row' : '';
+    if (istUrlaub) {
+        tr.classList.add('urlaub-row');
+    }
     tr.dataset.tag = tag;
     
     // Tag
     const tdTag = document.createElement('td');
     tdTag.className = 'text-center fw-bold';
-    if (feiertagName) {
+    if (istUrlaub) {
+        tdTag.innerHTML = `${tag}<br><small style="font-weight: normal; font-size: 0.8em; color: #198754;">Urlaub</small>`;
+    } else if (feiertagName) {
         tdTag.innerHTML = `${tag}<br><small style="font-weight: normal; font-size: 0.8em;">${feiertagName}</small>`;
     } else {
         tdTag.textContent = tag;
@@ -964,44 +1873,45 @@ function erstelleZeile(tag, wochentag, istWochenende, feiertagName = null) {
     tdWochentag.textContent = wochentag;
     tr.appendChild(tdWochentag);
     
-    if (istWochenende) {
-        // Wochenende - XXXXX vorbelegen, aber editierbar
-        // Von 1
+    if (istWochenende || istUrlaub) {
+        // Wochenende oder Urlaub - XXXXX oder "Urlaub" vorbelegen, aber editierbar
+        const vorbelegung = istUrlaub ? 'Urlaub' : 'XXXXX';
+        // Von 1 - nur hier die Vorbelegung eintragen
         const tdVon1 = document.createElement('td');
         const inputVon1 = document.createElement('input');
         inputVon1.type = 'text';
         inputVon1.className = 'time-input';
-        inputVon1.value = 'XXXXX';
+        inputVon1.value = vorbelegung;
         inputVon1.dataset.field = 'von1';
         tdVon1.appendChild(inputVon1);
         tr.appendChild(tdVon1);
         
-        // Bis 1
+        // Bis 1 - leer lassen
         const tdBis1 = document.createElement('td');
         const inputBis1 = document.createElement('input');
         inputBis1.type = 'text';
         inputBis1.className = 'time-input';
-        inputBis1.value = 'XXXXX';
+        inputBis1.value = '';
         inputBis1.dataset.field = 'bis1';
         tdBis1.appendChild(inputBis1);
         tr.appendChild(tdBis1);
         
-        // Von 2
+        // Von 2 - leer lassen
         const tdVon2 = document.createElement('td');
         const inputVon2 = document.createElement('input');
         inputVon2.type = 'text';
         inputVon2.className = 'time-input';
-        inputVon2.value = 'XXXXX';
+        inputVon2.value = '';
         inputVon2.dataset.field = 'von2';
         tdVon2.appendChild(inputVon2);
         tr.appendChild(tdVon2);
         
-        // Bis 2
+        // Bis 2 - leer lassen
         const tdBis2 = document.createElement('td');
         const inputBis2 = document.createElement('input');
         inputBis2.type = 'text';
         inputBis2.className = 'time-input';
-        inputBis2.value = 'XXXXX';
+        inputBis2.value = '';
         inputBis2.dataset.field = 'bis2';
         tdBis2.appendChild(inputBis2);
         tr.appendChild(tdBis2);
@@ -1021,7 +1931,15 @@ function erstelleZeile(tag, wochentag, istWochenende, feiertagName = null) {
         const inputStunden = document.createElement('input');
         inputStunden.type = 'text';
         inputStunden.className = 'time-input calculated-field';
-        inputStunden.value = 'XXXXX';
+        // Bei Urlaub: (Wochenstunden * Beschäftigungsgrad) / 5, sonst XXXXX
+        if (istUrlaub && wochenstunden > 0) {
+            const tagesStunden = berechneTaeglicheUrlaubsstunden();
+            const stunden = Math.floor(tagesStunden);
+            const minuten = Math.round((tagesStunden - stunden) * 60);
+            inputStunden.value = `${stunden}:${minuten.toString().padStart(2, '0')}`;
+        } else {
+            inputStunden.value = istUrlaub ? '0:00' : 'XXXXX';
+        }
         inputStunden.dataset.field = 'stunden';
         inputStunden.readOnly = false; // Editierbar
         tdStunden.appendChild(inputStunden);
@@ -1189,7 +2107,7 @@ function erstelleZeile(tag, wochentag, istWochenende, feiertagName = null) {
 // ===================================
 // Mobile Card erstellen
 // ===================================
-function erstelleMobileCard(tag, wochentag, istWochenende, feiertagName = null) {
+function erstelleMobileCard(tag, wochentag, istWochenende, feiertagName = null, istUrlaub = false) {
     const container = document.getElementById('mobileCardContainer');
     
     if (!container) {
@@ -1198,21 +2116,28 @@ function erstelleMobileCard(tag, wochentag, istWochenende, feiertagName = null) 
     
     // Card erstellen
     const card = document.createElement('div');
-    card.className = `day-card ${istWochenende ? 'weekend-card' : ''}`;
+    card.className = `day-card ${istWochenende ? 'weekend-card' : ''} ${istUrlaub ? 'urlaub-card' : ''}`;
     card.dataset.tag = tag;
     
     // Card Header
     const header = document.createElement('div');
-    header.className = `day-card-header ${istWochenende ? 'weekend-header' : ''}`;
-    const feiertagText = feiertagName ? `<div class="day-holiday" style="font-size: 0.85em; margin-top: 2px;">${feiertagName}</div>` : '';
+    header.className = `day-card-header ${istWochenende ? 'weekend-header' : ''} ${istUrlaub ? 'urlaub-header' : ''}`;
+    
+    // Erstelle Wochentag-Text mit Urlaub/Feiertag inline
+    let wochentagText = wochentag;
+    if (istUrlaub) {
+        wochentagText += ' <span style="font-size: 0.85em; color: #d4edda;">(Urlaub)</span>';
+    } else if (feiertagName) {
+        wochentagText += ` <span style="font-size: 0.85em;">(${feiertagName})</span>`;
+    }
+    
     header.innerHTML = `
         <div>
             <div class="day-number">${tag}</div>
-            <div class="day-name">${wochentag}</div>
-            ${feiertagText}
+            <div class="day-name">${wochentagText}</div>
         </div>
         <div>
-            <i class="bi bi-${istWochenende ? 'moon' : 'sun'}"></i>
+            <i class="bi bi-${istUrlaub ? 'calendar-check' : istWochenende ? 'moon' : 'sun'}"></i>
         </div>
     `;
     card.appendChild(header);
@@ -1221,8 +2146,21 @@ function erstelleMobileCard(tag, wochentag, istWochenende, feiertagName = null) 
     const body = document.createElement('div');
     body.className = 'day-card-body';
     
-    if (istWochenende) {
-        // Wochenende - Mit allen Feldern wie VBA
+    const vorbelegung = istUrlaub ? 'Urlaub' : 'XXXXX';
+    
+    // Berechne Stunden-Wert für Urlaub (mit Beschäftigungsgrad)
+    let stundenWert = 'XXXXX';
+    if (istUrlaub && wochenstunden > 0) {
+        const tagesStunden = berechneTaeglicheUrlaubsstunden();
+        const stunden = Math.floor(tagesStunden);
+        const minuten = Math.round((tagesStunden - stunden) * 60);
+        stundenWert = `${stunden}:${minuten.toString().padStart(2, '0')}`;
+    } else if (istUrlaub) {
+        stundenWert = '0:00';
+    }
+    
+    if (istWochenende || istUrlaub) {
+        // Wochenende oder Urlaub - Nur Von1 vorbelegen
         body.innerHTML = `
             <div class="time-group">
                 <label class="time-group-label">Arbeitszeit 1 (optional)</label>
@@ -1230,12 +2168,12 @@ function erstelleMobileCard(tag, wochentag, istWochenende, feiertagName = null) 
                     <div class="time-field">
                         <label>Von</label>
                         <input type="text" class="time-input" placeholder="HH:MM"
-                               data-field="von1" value="XXXXX">
+                               data-field="von1" value="${vorbelegung}">
                     </div>
                     <div class="time-field">
                         <label>Bis</label>
                         <input type="text" class="time-input" placeholder="HH:MM"
-                               data-field="bis1" value="XXXXX">
+                               data-field="bis1" value="">
                     </div>
                 </div>
             </div>
@@ -1246,18 +2184,18 @@ function erstelleMobileCard(tag, wochentag, istWochenende, feiertagName = null) 
                     <div class="time-field">
                         <label>Von</label>
                         <input type="text" class="time-input" placeholder="HH:MM"
-                               data-field="von2" value="XXXXX">
+                               data-field="von2" value="">
                     </div>
                     <div class="time-field">
                         <label>Bis</label>
                         <input type="text" class="time-input" placeholder="HH:MM"
-                               data-field="bis2" value="XXXXX">
+                               data-field="bis2" value="">
                     </div>
                 </div>
             </div>
             
             <div class="time-group">
-                <label class="time-group-label">Vor/Nachbereitung</label>
+                <label class="time-group-label">Vor/Nachbereitung/Bemerkung</label>
                 <div class="time-field">
                     <input type="text" class="time-input" placeholder="HH:MM"
                            data-field="vornach">
@@ -1268,7 +2206,7 @@ function erstelleMobileCard(tag, wochentag, istWochenende, feiertagName = null) 
                 <label class="time-group-label">Stunden (editierbar)</label>
                 <div class="time-field">
                     <input type="text" class="time-input calculated-field" placeholder="HH:MM"
-                           data-field="stunden" value="XXXXX">
+                           data-field="stunden" value="${stundenWert}">
                 </div>
             </div>
             
@@ -1329,7 +2267,7 @@ function erstelleMobileCard(tag, wochentag, istWochenende, feiertagName = null) 
             </div>
             
             <div class="time-group">
-                <label class="time-group-label">Vor/Nachbereitung</label>
+                <label class="time-group-label">Vor/Nachbereitung/Bemerkung</label>
                 <div class="time-field">
                     <input type="text" class="time-input" placeholder="HH:MM"
                            data-field="vornach">
@@ -1434,6 +2372,12 @@ function berechneZeile(tag, skipStundenUpdate = false) {
     // WICHTIG: Wenn dieses Feld manuell editiert wurde, NICHT überschreiben!
     if (manuellEditierteStunden.has(tag)) {
         return; // Berechnung überspringen für manuell editierte Felder
+    }
+    
+    // Bei Urlaubstagen (Von1 = "Urlaub") keine Berechnung durchführen
+    // Der voreingestellte Wert im Stunden-Feld bleibt erhalten
+    if (von1 === 'Urlaub') {
+        return; // Berechnung überspringen für Urlaubstage
     }
     
     let gesamtStunden = 0;
@@ -1940,7 +2884,8 @@ function setzeMonatZurueck() {
 function speichereStammdaten() {
     const stammdaten = {
         mitarbeiterName: document.getElementById('mitarbeiterName').value,
-        beschaeftigungsgrad: document.getElementById('beschaeftigungsgrad').value
+        beschaeftigungsgrad: document.getElementById('beschaeftigungsgrad').value,
+        urlaubstageProJahr: document.getElementById('urlaubstageProJahr').value
     };
     
     localStorage.setItem('stammdaten', JSON.stringify(stammdaten));
@@ -1954,6 +2899,7 @@ function ladeStammdaten() {
             const stammdaten = JSON.parse(gespeichert);
             document.getElementById('mitarbeiterName').value = stammdaten.mitarbeiterName || '';
             document.getElementById('beschaeftigungsgrad').value = stammdaten.beschaeftigungsgrad || '';
+            document.getElementById('urlaubstageProJahr').value = stammdaten.urlaubstageProJahr || '';
         } catch (e) {
         }
     }
@@ -2017,9 +2963,11 @@ function ladeWochenstunden() {
     const gespeichert = localStorage.getItem('wochenstunden');
     
     if (gespeichert) {
-        // Setze beide Eingabefelder
-        document.getElementById('wochenstunden').value = gespeichert;
-        document.getElementById('wochenstundenMobile').value = gespeichert;
+        // Setze beide Eingabefelder (falls sie existieren)
+        const wochenstundenInput = document.getElementById('wochenstunden');
+        const wochenstundenMobileInput = document.getElementById('wochenstundenMobile');
+        if (wochenstundenInput) wochenstundenInput.value = gespeichert;
+        if (wochenstundenMobileInput) wochenstundenMobileInput.value = gespeichert;
         
         // Parse zu Dezimalwert
         const parts = gespeichert.split(':');
@@ -2028,8 +2976,10 @@ function ladeWochenstunden() {
         wochenstunden = stunden + (minuten / 60);
     } else {
         // Standardwert 39:00
-        document.getElementById('wochenstunden').value = '39:00';
-        document.getElementById('wochenstundenMobile').value = '39:00';
+        const wochenstundenInput = document.getElementById('wochenstunden');
+        const wochenstundenMobileInput = document.getElementById('wochenstundenMobile');
+        if (wochenstundenInput) wochenstundenInput.value = '39:00';
+        if (wochenstundenMobileInput) wochenstundenMobileInput.value = '39:00';
         wochenstunden = 39.0;
     }
     
@@ -2503,4 +3453,131 @@ function formatMinutenZuZeit(minuten) {
     
     const vorzeichen = negativ ? '-' : '';
     return `${vorzeichen}${stunden}:${restMinuten.toString().padStart(2, '0')}`;
+
+// ===================================
+// Urlaubskalender Funktionen
+// ===================================
+
+// Urlaubstage aus LocalStorage laden
+function ladeUrlaubstage() {
+    const gespeichert = localStorage.getItem('urlaubstage');
+    if (gespeichert) {
+        try {
+            urlaubstage = JSON.parse(gespeichert);
+        } catch (e) {
+            urlaubstage = [];
+        }
+    }
+    // Aktualisiere Liste nur wenn Modal-Elemente existieren
+    if (document.getElementById('urlaubsliste')) {
+        aktualisiereUrlaubsliste();
+    }
+}
+
+// Urlaubstage in LocalStorage speichern
+function speichereUrlaubstage() {
+    localStorage.setItem('urlaubstage', JSON.stringify(urlaubstage));
+    aktualisiereUrlaubsliste();
+}
+
+// Urlaubsperiode hinzufügen
+function fuegeUrlaubHinzu(von, bis, isMobile = false) {
+    if (!von || !bis) {
+        zeigeToast('Bitte beide Daten auswählen', 'warning');
+        return;
+    }
+    
+    const vonDate = new Date(von);
+    const bisDate = new Date(bis);
+    
+    if (vonDate > bisDate) {
+        zeigeToast('Start-Datum muss vor End-Datum liegen', 'warning');
+        return;
+    }
+    
+    // Neue Urlaubsperiode erstellen
+    const neuerUrlaub = {
+        von: von,
+        bis: bis,
+        id: Date.now()
+    };
+    
+    urlaubstage.push(neuerUrlaub);
+    speichereUrlaubstage();
+    
+    // Eingabefelder leeren
+    if (isMobile) {
+        document.getElementById('urlaubVonMobile').value = '';
+        document.getElementById('urlaubBisMobile').value = '';
+    } else {
+        document.getElementById('urlaubVon').value = '';
+        document.getElementById('urlaubBis').value = '';
+    }
+    
+    // Berechne Anzahl Tage
+    const tage = berechneUrlaubstage(vonDate, bisDate);
+    zeigeToast(`Urlaub hinzugefügt: ${tage} Tag(e)`, 'success');
+    
+    // Aktualisiere Monatsansicht wenn im aktuellen Monat
+    const aktuellerMonatStart = new Date(aktuellesJahr, aktuellerMonat, 1);
+    const aktuellerMonatEnde = new Date(aktuellesJahr, aktuellerMonat + 1, 0);
+    
+    if ((vonDate <= aktuellerMonatEnde && bisDate >= aktuellerMonatStart)) {
+        ladeMonat(aktuellesJahr, aktuellerMonat);
+    }
+}
+
+// Berechne Anzahl Urlaubstage (ohne Wochenenden und Feiertage)
+function berechneUrlaubstage(vonDate, bisDate) {
+    let tage = 0;
+    const current = new Date(vonDate);
+    
+    while (current <= bisDate) {
+        const wochentag = current.getDay();
+        
+        // Prüfe ob Feiertag (wenn Feature aktiviert)
+        let istFeiertagHeute = false;
+        if (FEATURES.FEIERTAGE_LADEN) {
+            const jahr = current.getFullYear();
+            const monat = current.getMonth();
+            const tag = current.getDate();
+            const cacheKey = `${jahr}-${bundesland}`;
+            
+            if (feiertageCache[cacheKey]) {
+                const monatString = String(monat + 1).padStart(2, '0');
+                const tagString = String(tag).padStart(2, '0');
+                const datumString = `${jahr}-${monatString}-${tagString}`;
+                istFeiertagHeute = feiertageCache[cacheKey].has(datumString);
+            }
+        }
+        
+        // Zähle nur Werktage (Mo-Fr) die keine Feiertage sind
+        if (wochentag !== 0 && wochentag !== 6 && !istFeiertagHeute) {
+            tage++;
+        }
+        current.setDate(current.getDate() + 1);
+    }
+    
+    return tage;
+}
+
+// Urlaubsperiode löschen
+function loescheUrlaub(id) {
+    urlaubstage = urlaubstage.filter(u => u.id !== id);
+    speichereUrlaubstage();
+    zeigeToast('Urlaub gelöscht', 'info');
+    
+    // Aktualisiere Monatsansicht
+    ladeMonat(aktuellesJahr, aktuellerMonat);
+}
+
+// Prüfe ob ein Datum ein Urlaubstag ist
+function istUrlaubstag(datum) {
+    const datumString = datum.toISOString().split('T')[0];
+    
+    return urlaubstage.some(urlaub => {
+        return datumString >= urlaub.von && datumString <= urlaub.bis;
+    });
+}
+
 }

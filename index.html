@@ -33,7 +33,7 @@
                 <i class="bi bi-clock-history"></i> Zeiterfassung
             </a>
             <span class="navbar-text text-white" style="font-size: 0.85em; opacity: 0.8;">
-                v16.03.2026 20:32
+                v17.03.2026 23:17
             </span>
         </div>
     </nav>
@@ -47,13 +47,17 @@
                     <div class="card-body">
                         <!-- Stammdaten -->
                         <div class="row mb-3">
-                            <div class="col-md-6 mb-3 mb-md-0">
+                            <div class="col-md-4 mb-3 mb-md-0">
                                 <label for="mitarbeiterName" class="form-label fw-bold">Name:</label>
                                 <input type="text" class="form-control" id="mitarbeiterName" placeholder="Vor- und Nachname">
                             </div>
-                            <div class="col-md-6 mb-3 mb-md-0">
+                            <div class="col-md-4 mb-3 mb-md-0">
                                 <label for="beschaeftigungsgrad" class="form-label fw-bold">Beschäftigungsgrad:</label>
                                 <input type="text" class="form-control" id="beschaeftigungsgrad" placeholder="z.B. 100%, 80%, 50%">
+                            </div>
+                            <div class="col-md-4 mb-3 mb-md-0">
+                                <label for="urlaubstageProJahr" class="form-label fw-bold">Urlaubstage/Jahr:</label>
+                                <input type="number" class="form-control" id="urlaubstageProJahr" placeholder="z.B. 30" min="0" max="365">
                             </div>
                         </div>
                         
@@ -147,7 +151,7 @@
                                         <th class="text-center" style="width: 100px;">Bis</th>
                                         <th class="text-center" style="width: 100px;">Von</th>
                                         <th class="text-center" style="width: 100px;">Bis</th>
-                                        <th class="text-center" style="width: 120px;">Vor/Nach</th>
+                                        <th class="text-center" style="width: 120px;">Vor/Nach/Bem</th>
                                         <th class="text-center" style="width: 120px;">Stunden</th>
                                         <th class="text-center" style="width: 120px;">Gesamt</th>
                                         <th class="text-center" style="width: 80px;">Aktion</th>
@@ -198,6 +202,9 @@
                                 </button>
                                 <button class="btn btn-success" id="btnMobileSpeichern">
                                     <i class="bi bi-save"></i> Alle speichern
+                                </button>
+                                <button class="btn btn-success" id="btnMobileUrlaubskalender">
+                                    <i class="bi bi-calendar-check"></i> Urlaubskalender
                                 </button>
                                 <button class="btn btn-info" id="btnMobileStundenrechner">
                                     <i class="bi bi-calculator"></i> Stundenrechner
@@ -256,6 +263,7 @@
                         </div>
                     </div>
                 </div>
+                
                 <div id="mobileCardContainer">
                     <!-- Wird dynamisch mit Cards gefüllt -->
                 </div>
@@ -298,6 +306,9 @@
                         <div class="btn-group flex-wrap" role="group">
                             <button type="button" class="btn btn-outline-primary" id="btnAlleSpeichern">
                                 <i class="bi bi-save"></i> Alle speichern
+                            </button>
+                            <button type="button" class="btn btn-outline-success" id="btnUrlaubskalender">
+                                <i class="bi bi-calendar-check"></i> Urlaubskalender
                             </button>
                             <button type="button" class="btn btn-outline-info" id="btnStundenrechner">
                                 <i class="bi bi-calculator"></i> Stundenrechner
@@ -364,6 +375,95 @@
                         <input type="file" id="csvFileInput" accept=".csv" style="display: none;">
                         <input type="file" id="backupFileInput" accept=".json" style="display: none;">
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Urlaubskalender Modal -->
+    <div class="modal fade" id="urlaubskalenderModal" tabindex="-1" aria-labelledby="urlaubskalenderModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header bg-success text-white">
+                    <h5 class="modal-title" id="urlaubskalenderModalLabel">
+                        <i class="bi bi-calendar-check"></i> Urlaubskalender
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <!-- Urlaubstage hinzufügen -->
+                    <div class="row mb-3">
+                        <div class="col-md-4 mb-2">
+                            <label for="urlaubVon" class="form-label fw-bold">Von:</label>
+                            <input type="date" class="form-control" id="urlaubVon">
+                        </div>
+                        <div class="col-md-4 mb-2">
+                            <label for="urlaubBis" class="form-label fw-bold">Bis:</label>
+                            <input type="date" class="form-control" id="urlaubBis">
+                        </div>
+                        <div class="col-md-4 mb-2">
+                            <label class="form-label fw-bold d-block">&nbsp;</label>
+                            <button class="btn btn-success w-100" id="btnUrlaubHinzufuegen">
+                                <i class="bi bi-plus-circle"></i> Hinzufügen
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <button class="btn btn-info w-100" id="btnUrlaubOptimieren">
+                            <i class="bi bi-lightbulb"></i> Urlaubsoptimierung - Beste Brückentage finden
+                        </button>
+                    </div>
+                    
+                    <hr>
+                    
+                    <!-- Urlaubsliste -->
+                    <div id="urlaubslisteContainer">
+                        <h6 class="mb-3">
+                            <i class="bi bi-list-ul"></i> Geplante Urlaubstage
+                            <span class="badge bg-success ms-2" id="urlaubstageGesamt">0 Tage</span>
+                        </h6>
+                        <div id="urlaubsliste" class="list-group">
+                            <div class="text-muted text-center py-3">
+                                <i class="bi bi-calendar-x" style="font-size: 2rem;"></i>
+                                <p class="mb-0 mt-2">Noch keine Urlaubstage geplant</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                        <i class="bi bi-x-lg"></i> Schließen
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Urlaubsoptimierung Modal -->
+    <div class="modal fade" id="urlaubOptimierungModal" tabindex="-1" aria-labelledby="urlaubOptimierungModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header bg-info text-white">
+                    <h5 class="modal-title" id="urlaubOptimierungModalLabel">
+                        <i class="bi bi-lightbulb"></i> Urlaubsoptimierung
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle"></i>
+                        <strong>Optimale Urlaubsplanung für <span id="optimierungJahr"></span></strong>
+                        <p class="mb-0 mt-2">Hier sind die besten Zeiträume, um mit wenigen Urlaubstagen viele freie Tage zu erhalten:</p>
+                    </div>
+                    <div id="optimierungErgebnisse">
+                        <!-- Wird dynamisch gefüllt -->
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                        <i class="bi bi-x-lg"></i> Schließen
+                    </button>
                 </div>
             </div>
         </div>

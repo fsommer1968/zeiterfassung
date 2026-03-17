@@ -169,6 +169,10 @@ body {
     text-align: center;
     font-size: 0.95rem;
     transition: all var(--transition-speed) ease;
+    word-wrap: break-word;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    white-space: normal;
 }
 
 .time-input:focus,
@@ -573,6 +577,30 @@ body {
 
 .table-responsive::-webkit-scrollbar-thumb:hover {
     background: #555;
+}
+
+/* Urlaubskalender Styles */
+.urlaub-row {
+    background-color: #d1e7dd !important;
+}
+
+.urlaub-card {
+    border-color: #198754 !important;
+    background-color: #d1e7dd !important;
+}
+
+.urlaub-header {
+    background: linear-gradient(135deg, #198754 0%, #146c43 100%) !important;
+}
+
+.list-group-item {
+    border-radius: 8px;
+    margin-bottom: 8px;
+}
+
+#urlaubskalenderContent .card-body,
+#urlaubskalenderMobile .card-body {
+    padding: 1.25rem;
 }
 
 /* Made with Bob */

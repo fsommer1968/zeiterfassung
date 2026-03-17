@@ -68,6 +68,12 @@
             font-size: 8pt;
         }
         
+        /* Spezielle Formatierung für Vor/Nach/Bem Spalte */
+        th:nth-child(7),
+        td:nth-child(7) {
+            white-space: nowrap;
+        }
+        
         th {
             background-color: #e0e0e0;
             font-weight: bold;
@@ -210,7 +216,7 @@
                 <th style="width: 10%;">Bis</th>
                 <th style="width: 10%;">Von</th>
                 <th style="width: 10%;">Bis</th>
-                <th style="width: 12%;">Vor/Nach</th>
+                <th style="width: 12%;">Vor/Nach/Bem</th>
                 <th style="width: 12%;">Stunden</th>
                 <th style="width: 12%;">Gesamt</th>
             </tr>
