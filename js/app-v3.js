@@ -3162,12 +3162,22 @@ function importiereCSV() {
 
 function erstelleBackup() {
     try {
+        // Sammle alle Urlaubstage aus localStorage
+        const urlaubstage = {};
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && key.startsWith('urlaub_tage_')) {
+                urlaubstage[key] = localStorage.getItem(key);
+            }
+        }
+        
         // Sammle alle Daten aus localStorage
         const backup = {
-            version: '1.0',
+            version: '1.1',
             timestamp: new Date().toISOString(),
             zeiterfassungDaten: zeiterfassungDaten,
-            stammdaten: JSON.parse(localStorage.getItem('stammdaten') || '{}')
+            stammdaten: JSON.parse(localStorage.getItem('stammdaten') || '{}'),
+            urlaubstage: urlaubstage
         };
         
         // Erstelle JSON-String
@@ -3224,6 +3234,16 @@ function stelleBackupWiederHer() {
                 throw new Error('Ungültiges Backup-Format');
             }
             
+            // Lösche alle alten Urlaubstage aus localStorage
+            const keysToDelete = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith('urlaub_tage_')) {
+                    keysToDelete.push(key);
+                }
+            }
+            keysToDelete.forEach(key => localStorage.removeItem(key));
+            
             // Daten wiederherstellen
             zeiterfassungDaten = backup.zeiterfassungDaten;
             
@@ -3232,11 +3252,21 @@ function stelleBackupWiederHer() {
                 localStorage.setItem('stammdaten', JSON.stringify(backup.stammdaten));
             }
             
+            // Urlaubstage wiederherstellen (falls vorhanden)
+            if (backup.urlaubstage) {
+                Object.keys(backup.urlaubstage).forEach(key => {
+                    localStorage.setItem(key, backup.urlaubstage[key]);
+                });
+            }
+            
             // In localStorage speichern
             speichereDatenInLocalStorage();
             
             // Stammdaten laden
             ladeStammdaten();
+            
+            // Urlaubsliste aktualisieren
+            aktualisiereUrlaubsliste();
             
             // Aktuellen Monat neu laden
             ladeMonat(aktuellesJahr, aktuellerMonat);
