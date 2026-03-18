@@ -432,14 +432,79 @@ function fuegeUrlaubstagAutomatischHinzu(tag) {
         
         // Aktualisiere Listen
         aktualisiereUrlaubsliste();
+        aktualisiereUrlaubskalenderBadge();
         zeigeToast('Urlaubstag automatisch hinzugefügt', 'success');
     } else {
         // Bereits Urlaubstage vorhanden - nicht überschreiben
         zeigeToast(`Urlaubstag bereits vorhanden (${vorhandeneUrlaubstage} Tage)`, 'info');
     }
     
-    // Aktualisiere die Zeile/Card visuell
-    ladeMonat(aktuellesJahr, aktuellerMonat);
+    // Aktualisiere die Zeile/Card visuell (immer, auch wenn bereits vorhanden)
+    // Desktop: Zeile
+    const tr = document.querySelector(`#zeiterfassungBody tr[data-tag="${tag}"]`);
+    if (tr) {
+        tr.classList.add('urlaub-row');
+        
+        // Lösche ausgefüllte Arbeitszeit-Felder (Bis1, Von2, Bis2, Vor/Nach)
+        const bis1Input = tr.querySelector('[data-field="bis1"]');
+        const von2Input = tr.querySelector('[data-field="von2"]');
+        const bis2Input = tr.querySelector('[data-field="bis2"]');
+        const vornachInput = tr.querySelector('[data-field="vornach"]');
+        
+        if (bis1Input) bis1Input.value = '';
+        if (von2Input) von2Input.value = '';
+        if (bis2Input) bis2Input.value = '';
+        if (vornachInput) vornachInput.value = '';
+        
+        // Setze Urlaubsstunden im Stunden-Feld
+        const stundenInput = tr.querySelector('[data-field="stunden"]');
+        if (stundenInput && wochenstunden > 0) {
+            const tagesStunden = berechneTaeglicheUrlaubsstunden();
+            const stunden = Math.floor(tagesStunden);
+            const minuten = Math.round((tagesStunden - stunden) * 60);
+            stundenInput.value = `${stunden}:${minuten.toString().padStart(2, '0')}`;
+        } else if (stundenInput) {
+            stundenInput.value = '0:00';
+        }
+    }
+    
+    // Mobile: Card
+    const card = document.querySelector(`#mobileCardContainer .day-card[data-tag="${tag}"]`);
+    if (card) {
+        card.classList.add('urlaub-card');
+        const header = card.querySelector('.day-card-header');
+        if (header) {
+            header.classList.add('urlaub-header');
+        }
+        
+        // Lösche ausgefüllte Arbeitszeit-Felder (Bis1, Von2, Bis2, Vor/Nach)
+        const bis1Input = card.querySelector('[data-field="bis1"]');
+        const von2Input = card.querySelector('[data-field="von2"]');
+        const bis2Input = card.querySelector('[data-field="bis2"]');
+        const vornachInput = card.querySelector('[data-field="vornach"]');
+        
+        if (bis1Input) bis1Input.value = '';
+        if (von2Input) von2Input.value = '';
+        if (bis2Input) bis2Input.value = '';
+        if (vornachInput) vornachInput.value = '';
+        
+        // Setze Urlaubsstunden im Stunden-Feld
+        const stundenInput = card.querySelector('[data-field="stunden"]');
+        if (stundenInput && wochenstunden > 0) {
+            const tagesStunden = berechneTaeglicheUrlaubsstunden();
+            const stunden = Math.floor(tagesStunden);
+            const minuten = Math.round((tagesStunden - stunden) * 60);
+            stundenInput.value = `${stunden}:${minuten.toString().padStart(2, '0')}`;
+        } else if (stundenInput) {
+            stundenInput.value = '0:00';
+        }
+    }
+    
+    // Speichere die Zeile mit "Urlaub" im Von1-Feld und den Urlaubsstunden
+    speichereZeile(tag);
+    
+    // Berechne alle Zeilen neu für kumulierte Werte
+    berechneAlleZeilen();
 }
 
 // Lösche Urlaubseinträge für einen Datumsbereich
@@ -1098,18 +1163,54 @@ function initEventListeners() {
                             const datumKey = `${datum.getFullYear()}-${String(datum.getMonth() + 1).padStart(2, '0')}-${String(datum.getDate()).padStart(2, '0')}`;
                             localStorage.removeItem(`urlaub_tage_${datumKey}`);
                             
-                            // Lösche auch die gespeicherten Zeitdaten für diesen Tag
-                            const monatsKey = getMonatsKey(aktuellesJahr, aktuellerMonat);
-                            if (zeiterfassungDaten[monatsKey] && zeiterfassungDaten[monatsKey].tage && zeiterfassungDaten[monatsKey].tage[tag]) {
-                                delete zeiterfassungDaten[monatsKey].tage[tag];
-                                speichereDatenInLocalStorage();
-                            }
-                            
-                            // Aktualisiere Listen und Monatsansicht
+                            // Aktualisiere Listen
                             aktualisiereUrlaubsliste();
                             aktualisiereUrlaubskalenderBadge();
-                            ladeMonat(aktuellesJahr, aktuellerMonat);
                             
+                            // Entferne Urlaub-Markierung von der Zeile/Card
+                            const row = e.target.closest('tr') || e.target.closest('.day-card');
+                            if (row) {
+                                if (row.tagName === 'TR') {
+                                    row.classList.remove('urlaub-row');
+                                    
+                                    // Setze alle Felder wie bei normalem Arbeitstag zurück (leer)
+                                    const bis1Input = row.querySelector('[data-field="bis1"]');
+                                    const von2Input = row.querySelector('[data-field="von2"]');
+                                    const bis2Input = row.querySelector('[data-field="bis2"]');
+                                    const vornachInput = row.querySelector('[data-field="vornach"]');
+                                    const stundenInput = row.querySelector('[data-field="stunden"]');
+                                    
+                                    if (bis1Input) bis1Input.value = '';
+                                    if (von2Input) von2Input.value = '';
+                                    if (bis2Input) bis2Input.value = '';
+                                    if (vornachInput) vornachInput.value = '';
+                                    if (stundenInput) stundenInput.value = '0:00';
+                                } else {
+                                    row.classList.remove('urlaub-card');
+                                    const header = row.querySelector('.day-card-header');
+                                    if (header) {
+                                        header.classList.remove('urlaub-header');
+                                    }
+                                    
+                                    // Setze alle Felder wie bei normalem Arbeitstag zurück (leer)
+                                    const bis1Input = row.querySelector('[data-field="bis1"]');
+                                    const von2Input = row.querySelector('[data-field="von2"]');
+                                    const bis2Input = row.querySelector('[data-field="bis2"]');
+                                    const vornachInput = row.querySelector('[data-field="vornach"]');
+                                    const stundenInput = row.querySelector('[data-field="stunden"]');
+                                    
+                                    if (bis1Input) bis1Input.value = '';
+                                    if (von2Input) von2Input.value = '';
+                                    if (bis2Input) bis2Input.value = '';
+                                    if (vornachInput) vornachInput.value = '';
+                                    if (stundenInput) stundenInput.value = '0:00';
+                                }
+                            }
+                            
+                            // Berechne alle Zeilen neu
+                            berechneAlleZeilen();
+                            
+                            zeigeToast('Urlaubstag entfernt', 'info');
                             return; // Keine weitere Verarbeitung nach Löschung
                         }
                     }
@@ -1134,10 +1235,54 @@ function initEventListeners() {
                             const datumKey = `${datum.getFullYear()}-${String(datum.getMonth() + 1).padStart(2, '0')}-${String(datum.getDate()).padStart(2, '0')}`;
                             localStorage.removeItem(`urlaub_tage_${datumKey}`);
 
-                            // Aktualisiere Listen und Monatsansicht
+                            // Aktualisiere Listen
                             aktualisiereUrlaubsliste();
                             aktualisiereUrlaubskalenderBadge();
-                            ladeMonat(aktuellesJahr, aktuellerMonat);
+                            
+                            // Entferne Urlaub-Markierung von der Zeile/Card
+                            if (row) {
+                                if (row.tagName === 'TR') {
+                                    row.classList.remove('urlaub-row');
+                                    
+                                    // Setze alle Felder wie bei normalem Arbeitstag zurück (leer)
+                                    const von1Input = row.querySelector('[data-field="von1"]');
+                                    const bis1Input = row.querySelector('[data-field="bis1"]');
+                                    const von2Input = row.querySelector('[data-field="von2"]');
+                                    const bis2Input = row.querySelector('[data-field="bis2"]');
+                                    const vornachInput = row.querySelector('[data-field="vornach"]');
+                                    
+                                    if (von1Input && von1Input.value.trim().toLowerCase() === 'urlaub') {
+                                        von1Input.value = '';
+                                    }
+                                    if (bis1Input) bis1Input.value = '';
+                                    if (von2Input) von2Input.value = '';
+                                    if (bis2Input) bis2Input.value = '';
+                                    if (vornachInput) vornachInput.value = '';
+                                } else {
+                                    row.classList.remove('urlaub-card');
+                                    const header = row.querySelector('.day-card-header');
+                                    if (header) {
+                                        header.classList.remove('urlaub-header');
+                                    }
+                                    
+                                    // Setze alle Felder wie bei normalem Arbeitstag zurück (leer)
+                                    const von1Input = row.querySelector('[data-field="von1"]');
+                                    const bis1Input = row.querySelector('[data-field="bis1"]');
+                                    const von2Input = row.querySelector('[data-field="von2"]');
+                                    const bis2Input = row.querySelector('[data-field="bis2"]');
+                                    const vornachInput = row.querySelector('[data-field="vornach"]');
+                                    
+                                    if (von1Input && von1Input.value.trim().toLowerCase() === 'urlaub') {
+                                        von1Input.value = '';
+                                    }
+                                    if (bis1Input) bis1Input.value = '';
+                                    if (von2Input) von2Input.value = '';
+                                    if (bis2Input) bis2Input.value = '';
+                                    if (vornachInput) vornachInput.value = '';
+                                }
+                            }
+                            
+                            zeigeToast('Urlaubstag entfernt', 'info');
                         } else {
                             // Stunden vorhanden - berechne und speichere Urlaubstage
                             const parts = stundenValue.split(':');
@@ -1363,6 +1508,48 @@ async function ladeMonat(jahr, monat) {
     
     // Gespeicherte Daten laden
     ladeDatenFuerMonat(jahr, monat);
+    
+    // Prüfe alle Urlaubstage und stelle sicher, dass sie korrekt befüllt sind
+    for (let tag = 1; tag <= anzahlTage; tag++) {
+        const datum = new Date(jahr, monat, tag);
+        if (istUrlaubstag(datum)) {
+            const tr = document.querySelector(`#zeiterfassungBody tr[data-tag="${tag}"]`);
+            const card = document.querySelector(`#mobileCardContainer .day-card[data-tag="${tag}"]`);
+            
+            // Prüfe ob Von1-Feld leer ist (keine gespeicherten Daten)
+            const von1Input = tr ? tr.querySelector('[data-field="von1"]') : card?.querySelector('[data-field="von1"]');
+            if (von1Input && (!von1Input.value || von1Input.value.trim() === '')) {
+                // Setze "Urlaub" und Urlaubsstunden
+                if (tr) {
+                    const von1 = tr.querySelector('[data-field="von1"]');
+                    const stunden = tr.querySelector('[data-field="stunden"]');
+                    if (von1) von1.value = 'Urlaub';
+                    if (stunden && wochenstunden > 0) {
+                        const tagesStunden = berechneTaeglicheUrlaubsstunden();
+                        const std = Math.floor(tagesStunden);
+                        const min = Math.round((tagesStunden - std) * 60);
+                        stunden.value = `${std}:${min.toString().padStart(2, '0')}`;
+                    } else if (stunden) {
+                        stunden.value = '0:00';
+                    }
+                }
+                
+                if (card) {
+                    const von1 = card.querySelector('[data-field="von1"]');
+                    const stunden = card.querySelector('[data-field="stunden"]');
+                    if (von1) von1.value = 'Urlaub';
+                    if (stunden && wochenstunden > 0) {
+                        const tagesStunden = berechneTaeglicheUrlaubsstunden();
+                        const std = Math.floor(tagesStunden);
+                        const min = Math.round((tagesStunden - std) * 60);
+                        stunden.value = `${std}:${min.toString().padStart(2, '0')}`;
+                    } else if (stunden) {
+                        stunden.value = '0:00';
+                    }
+                }
+            }
+        }
+    }
     
     // Übertrag Vormonat laden
     ladeUebertragVormonat(jahr, monat);
@@ -1876,42 +2063,46 @@ function erstelleZeile(tag, wochentag, istWochenende, feiertagName = null, istUr
     if (istWochenende || istUrlaub) {
         // Wochenende oder Urlaub - XXXXX oder "Urlaub" vorbelegen, aber editierbar
         const vorbelegung = istUrlaub ? 'Urlaub' : 'XXXXX';
-        // Von 1 - nur hier die Vorbelegung eintragen
+        // Von 1 - Vorbelegung eintragen
         const tdVon1 = document.createElement('td');
         const inputVon1 = document.createElement('input');
         inputVon1.type = 'text';
         inputVon1.className = 'time-input';
         inputVon1.value = vorbelegung;
+        inputVon1.placeholder = 'HH:MM';
         inputVon1.dataset.field = 'von1';
         tdVon1.appendChild(inputVon1);
         tr.appendChild(tdVon1);
         
-        // Bis 1 - leer lassen
+        // Bis 1 - für Wochenende/Feiertag mit XXXXX vorbelegen, für Urlaub leer
         const tdBis1 = document.createElement('td');
         const inputBis1 = document.createElement('input');
         inputBis1.type = 'text';
         inputBis1.className = 'time-input';
-        inputBis1.value = '';
+        inputBis1.value = istUrlaub ? '' : 'XXXXX';
+        inputBis1.placeholder = 'HH:MM';
         inputBis1.dataset.field = 'bis1';
         tdBis1.appendChild(inputBis1);
         tr.appendChild(tdBis1);
         
-        // Von 2 - leer lassen
+        // Von 2 - für Wochenende/Feiertag mit XXXXX vorbelegen, für Urlaub leer
         const tdVon2 = document.createElement('td');
         const inputVon2 = document.createElement('input');
         inputVon2.type = 'text';
         inputVon2.className = 'time-input';
-        inputVon2.value = '';
+        inputVon2.value = istUrlaub ? '' : 'XXXXX';
+        inputVon2.placeholder = 'HH:MM';
         inputVon2.dataset.field = 'von2';
         tdVon2.appendChild(inputVon2);
         tr.appendChild(tdVon2);
         
-        // Bis 2 - leer lassen
+        // Bis 2 - für Wochenende/Feiertag mit XXXXX vorbelegen, für Urlaub leer
         const tdBis2 = document.createElement('td');
         const inputBis2 = document.createElement('input');
         inputBis2.type = 'text';
         inputBis2.className = 'time-input';
-        inputBis2.value = '';
+        inputBis2.value = istUrlaub ? '' : 'XXXXX';
+        inputBis2.placeholder = 'HH:MM';
         inputBis2.dataset.field = 'bis2';
         tdBis2.appendChild(inputBis2);
         tr.appendChild(tdBis2);
@@ -2160,7 +2351,8 @@ function erstelleMobileCard(tag, wochentag, istWochenende, feiertagName = null, 
     }
     
     if (istWochenende || istUrlaub) {
-        // Wochenende oder Urlaub - Nur Von1 vorbelegen
+        // Wochenende oder Urlaub - Von/Bis Felder mit XXXXX vorbelegen (außer bei Urlaub)
+        const zeitVorbelegung = istUrlaub ? '' : 'XXXXX';
         body.innerHTML = `
             <div class="time-group">
                 <label class="time-group-label">Arbeitszeit 1 (optional)</label>
@@ -2173,7 +2365,7 @@ function erstelleMobileCard(tag, wochentag, istWochenende, feiertagName = null, 
                     <div class="time-field">
                         <label>Bis</label>
                         <input type="text" class="time-input" placeholder="HH:MM"
-                               data-field="bis1" value="">
+                               data-field="bis1" value="${zeitVorbelegung}">
                     </div>
                 </div>
             </div>
@@ -2184,12 +2376,12 @@ function erstelleMobileCard(tag, wochentag, istWochenende, feiertagName = null, 
                     <div class="time-field">
                         <label>Von</label>
                         <input type="text" class="time-input" placeholder="HH:MM"
-                               data-field="von2" value="">
+                               data-field="von2" value="${zeitVorbelegung}">
                     </div>
                     <div class="time-field">
                         <label>Bis</label>
                         <input type="text" class="time-input" placeholder="HH:MM"
-                               data-field="bis2" value="">
+                               data-field="bis2" value="${zeitVorbelegung}">
                     </div>
                 </div>
             </div>
@@ -2713,6 +2905,11 @@ function speichereZeile(tag) {
         zeiterfassungDaten[key].tage[tag] = {};
     }
     
+    // Prüfe ob Von1-Feld "Urlaub" enthält
+    const von1Input = element.querySelector('[data-field="von1"]');
+    const von1Value = von1Input ? (von1Input.value || von1Input.textContent || '').trim().toLowerCase() : '';
+    const istUrlaubEingabe = von1Value === 'urlaub';
+    
     // Alle Felder speichern (inputs und spans)
     const inputs = element.querySelectorAll('input[data-field], span[data-field]');
     inputs.forEach(input => {
@@ -2725,6 +2922,36 @@ function speichereZeile(tag) {
     zeiterfassungDaten[key].manuellEditierteStunden = Array.from(manuellEditierteStunden);
     
     speichereDatenInLocalStorage();
+    
+    // Wenn "Urlaub" eingegeben wurde, aktualisiere visuelle Markierung
+    if (istUrlaubEingabe) {
+        // Desktop: Zeile
+        if (tr) {
+            tr.classList.add('urlaub-row');
+        }
+        
+        // Mobile: Card
+        if (card) {
+            card.classList.add('urlaub-card');
+            const header = card.querySelector('.day-card-header');
+            if (header) {
+                header.classList.add('urlaub-header');
+            }
+        }
+    } else {
+        // Wenn "Urlaub" entfernt wurde, entferne Markierung
+        if (tr) {
+            tr.classList.remove('urlaub-row');
+        }
+        
+        if (card) {
+            card.classList.remove('urlaub-card');
+            const header = card.querySelector('.day-card-header');
+            if (header) {
+                header.classList.remove('urlaub-header');
+            }
+        }
+    }
     
     // Synchronisiere die andere Ansicht (Desktop <-> Mobile)
     synchronisiereAnsichten(tag);
@@ -2746,6 +2973,9 @@ function synchronisiereAnsichten(tag) {
     
     if (!tagDaten) return;
     
+    // Prüfe ob "Urlaub" im Von1-Feld steht
+    const istUrlaubEingabe = tagDaten.von1 && tagDaten.von1.trim().toLowerCase() === 'urlaub';
+    
     // Desktop Tabelle aktualisieren
     const tr = document.querySelector(`#zeiterfassungBody tr[data-tag="${tag}"]`);
     if (tr) {
@@ -2755,6 +2985,33 @@ function synchronisiereAnsichten(tag) {
                 input.value = tagDaten[field];
             }
         });
+        
+        // Urlaubstag-Markierung synchronisieren
+        if (istUrlaubEingabe) {
+            tr.classList.add('urlaub-row');
+            
+            // Aktualisiere Tag-Spalte mit "Urlaub"-Text
+            const tdTag = tr.querySelector('td:first-child');
+            if (tdTag && !tdTag.innerHTML.includes('Urlaub')) {
+                tdTag.innerHTML = `${tag}<br><small style="font-weight: normal; font-size: 0.8em; color: #198754;">Urlaub</small>`;
+            }
+        } else {
+            tr.classList.remove('urlaub-row');
+            
+            // Entferne "Urlaub"-Text aus Tag-Spalte
+            const tdTag = tr.querySelector('td:first-child');
+            if (tdTag && tdTag.innerHTML.includes('Urlaub')) {
+                // Prüfe ob es ein Feiertag ist
+                const feiertagMatch = tdTag.innerHTML.match(/<small[^>]*>(?!Urlaub)([^<]+)<\/small>/);
+                if (feiertagMatch) {
+                    // Feiertag beibehalten
+                    tdTag.innerHTML = `${tag}<br><small style="font-weight: normal; font-size: 0.8em;">${feiertagMatch[1]}</small>`;
+                } else {
+                    // Nur Tag-Nummer
+                    tdTag.textContent = tag;
+                }
+            }
+        }
     }
     
     // Mobile Card aktualisieren
@@ -2770,6 +3027,42 @@ function synchronisiereAnsichten(tag) {
                 }
             }
         });
+        
+        // Urlaubstag-Markierung synchronisieren
+        const header = card.querySelector('.day-card-header');
+        if (istUrlaubEingabe) {
+            card.classList.add('urlaub-card');
+            if (header) {
+                header.classList.add('urlaub-header');
+                
+                // Aktualisiere Wochentag-Text mit "Urlaub"
+                const dayName = header.querySelector('.day-name');
+                if (dayName && !dayName.innerHTML.includes('Urlaub')) {
+                    const wochentagText = dayName.textContent.split('(')[0].trim();
+                    dayName.innerHTML = `${wochentagText} <span style="font-size: 0.85em; color: #d4edda;">(Urlaub)</span>`;
+                }
+            }
+        } else {
+            card.classList.remove('urlaub-card');
+            if (header) {
+                header.classList.remove('urlaub-header');
+                
+                // Entferne "Urlaub"-Text aus Wochentag
+                const dayName = header.querySelector('.day-name');
+                if (dayName && dayName.innerHTML.includes('Urlaub')) {
+                    const wochentagText = dayName.textContent.split('(')[0].trim();
+                    // Prüfe ob es ein Feiertag ist
+                    const feiertagMatch = dayName.innerHTML.match(/\((?!Urlaub)([^)]+)\)/);
+                    if (feiertagMatch) {
+                        // Feiertag beibehalten
+                        dayName.innerHTML = `${wochentagText} <span style="font-size: 0.85em;">(${feiertagMatch[1]})</span>`;
+                    } else {
+                        // Nur Wochentag
+                        dayName.textContent = wochentagText;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -3320,6 +3613,17 @@ function drucken() {
         
         const zeilen = tbody.querySelectorAll('tr');
         
+        // Zähle Urlaubstage im aktuellen Monat
+        let urlaubstageImMonat = 0;
+        const anzahlTage = new Date(aktuellesJahr, aktuellerMonat + 1, 0).getDate();
+        for (let tag = 1; tag <= anzahlTage; tag++) {
+            const datum = new Date(aktuellesJahr, aktuellerMonat, tag);
+            const urlaubstage = ladeUrlaubstageProTag(datum);
+            if (urlaubstage > 0) {
+                urlaubstageImMonat += urlaubstage;
+            }
+        }
+        
         const druckDaten = {
             monat: MONATSNAMEN[aktuellerMonat],
             jahr: aktuellesJahr,
@@ -3330,6 +3634,7 @@ function drucken() {
             istStunden: document.getElementById('summeIst')?.textContent || '0:00',
             differenz: document.getElementById('differenz')?.textContent || '0:00',
             uebertrag: document.getElementById('uebertrag')?.textContent || '0:00',
+            urlaubstageImMonat: urlaubstageImMonat,
             zeilen: []
         };
         

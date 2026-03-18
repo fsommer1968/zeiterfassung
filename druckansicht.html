@@ -228,6 +228,9 @@
     
     <div class="summary">
         <h2>Zusammenfassung</h2>
+        <div id="urlaubstageInfo" style="display: none; text-align: center; margin: 2mm 0; font-size: 9pt;">
+            <span style="font-style: italic; color: #000;">Urlaubstage im Monat: <strong id="urlaubstageImMonat">0</strong></span>
+        </div>
         <div class="summary-table">
             <span class="summary-label">IST-Stunden:</span>
             <span class="summary-value" id="istStunden">0:00</span>
@@ -283,6 +286,23 @@
                 document.getElementById('istStunden').textContent = daten.istStunden;
                 document.getElementById('sollStundenSummary').textContent = daten.sollStunden;
                 document.getElementById('uebertrag').textContent = daten.uebertrag;
+                
+                // Urlaubstage anzeigen (nur wenn > 0)
+                if (daten.urlaubstageImMonat && daten.urlaubstageImMonat > 0) {
+                    const urlaubstageInfo = document.getElementById('urlaubstageInfo');
+                    const urlaubstageWert = document.getElementById('urlaubstageImMonat');
+                    
+                    if (urlaubstageInfo && urlaubstageWert) {
+                        urlaubstageInfo.style.display = '';
+                        
+                        // Formatiere die Anzeige (z.B. "5" oder "2.5" für halbe Tage)
+                        const tageText = daten.urlaubstageImMonat % 1 === 0
+                            ? daten.urlaubstageImMonat.toString()
+                            : daten.urlaubstageImMonat.toFixed(1);
+                        
+                        urlaubstageWert.textContent = tageText + (daten.urlaubstageImMonat === 1 ? ' Tag' : ' Tage');
+                    }
+                }
                 
                 // Hilfsfunktion: Formatiere Zeit mit führender Null
                 function formatTime(time) {

@@ -33,7 +33,7 @@
                 <i class="bi bi-clock-history"></i> Zeiterfassung
             </a>
             <span class="navbar-text text-white" style="font-size: 0.85em; opacity: 0.8;">
-                v17.03.2026 23:36
+                v18.03.2026 12:32
             </span>
         </div>
     </nav>
@@ -219,9 +219,16 @@
                                 <button class="btn btn-outline-warning" id="btnMobileBackup">
                                     <i class="bi bi-cloud-download"></i> Backup erstellen
                                 </button>
-                                <button class="btn btn-outline-warning" id="btnMobileRestore">
-                                    <i class="bi bi-cloud-upload"></i> Backup wiederherstellen
-                                </button>
+                                <div class="d-flex gap-2 align-items-center">
+                                    <button class="btn btn-outline-warning flex-grow-1" id="btnMobileRestore">
+                                        <i class="bi bi-cloud-upload"></i> Restore
+                                    </button>
+                                    <!-- RESTORE HELP: Kann bei Bedarf entfernt werden -->
+                                    <button type="button" class="btn btn-outline-info btn-sm" data-bs-toggle="modal" data-bs-target="#restoreHelpModal" title="Restore-Hilfe">
+                                        <i class="bi bi-question-circle"></i> Hilfe
+                                    </button>
+                                    <!-- END RESTORE HELP -->
+                                </div>
                                 <hr class="my-2">
                                 <div class="mb-2">
                                     <label for="wochenstundenMobile" class="form-label mb-1">
@@ -325,6 +332,11 @@
                             <button type="button" class="btn btn-outline-warning" id="btnRestore">
                                 <i class="bi bi-cloud-upload"></i> Restore
                             </button>
+                            <!-- RESTORE HELP: Kann bei Bedarf entfernt werden -->
+                            <button type="button" class="btn btn-outline-info btn-sm" data-bs-toggle="modal" data-bs-target="#restoreHelpModal" title="Restore-Hilfe">
+                                <i class="bi bi-question-circle"></i>
+                            </button>
+                            <!-- END RESTORE HELP -->
                         </div>
                         <div class="row mt-3">
                             <div class="col-md-6">
@@ -545,6 +557,94 @@
             </div>
         </div>
     </div>
+
+    <!-- RESTORE HELP MODAL: Kann bei Bedarf entfernt werden -->
+    <div class="modal fade" id="restoreHelpModal" tabindex="-1" aria-labelledby="restoreHelpModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header bg-warning text-dark">
+                    <h5 class="modal-title" id="restoreHelpModalLabel">
+                        <i class="bi bi-question-circle"></i> Anleitung: Backup wiederherstellen (Restore)
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle"></i>
+                        <strong>Was ist ein Restore?</strong>
+                        <p class="mb-0 mt-2">Mit der Restore-Funktion können Sie eine zuvor erstellte Backup-Datei wiederherstellen. Dies ist nützlich, wenn Sie Daten verloren haben oder auf einen früheren Stand zurückkehren möchten.</p>
+                    </div>
+
+                    <h6 class="mt-4 mb-3"><i class="bi bi-1-circle-fill text-primary"></i> Wo finde ich meine Backup-Datei?</h6>
+                    <div class="card mb-3">
+                        <div class="card-body">
+                            <p class="mb-2"><strong>Die Backup-Datei wurde beim Erstellen automatisch heruntergeladen:</strong></p>
+                            <ul class="mb-2">
+                                <li><strong>Windows:</strong> Normalerweise im Ordner <code>Downloads</code> oder <code>C:\Users\[IhrName]\Downloads</code></li>
+                                <li><strong>Mac:</strong> Im Ordner <code>Downloads</code> oder <code>/Users/[IhrName]/Downloads</code></li>
+                                <li><strong>Smartphone/Tablet:</strong> Im Download-Ordner Ihres Geräts</li>
+                            </ul>
+                            <p class="mb-0"><strong>Dateiname:</strong> Die Datei heißt z.B. <code>zeiterfassung-backup-2026-03-18.json</code></p>
+                        </div>
+                    </div>
+
+                    <h6 class="mt-4 mb-3"><i class="bi bi-2-circle-fill text-primary"></i> Wie führe ich ein Restore durch?</h6>
+                    <div class="card mb-3">
+                        <div class="card-body">
+                            <ol class="mb-0">
+                                <li class="mb-2">
+                                    <strong>Klicken Sie auf den "Restore"-Button</strong>
+                                    <br><small class="text-muted">Der Button befindet sich bei den Schnellaktionen (gelb/orange mit Cloud-Upload-Symbol)</small>
+                                </li>
+                                <li class="mb-2">
+                                    <strong>Wählen Sie Ihre Backup-Datei aus</strong>
+                                    <br><small class="text-muted">Es öffnet sich ein Datei-Auswahl-Dialog. Navigieren Sie zu Ihrem Downloads-Ordner und wählen Sie die .json Backup-Datei aus</small>
+                                </li>
+                                <li class="mb-2">
+                                    <strong>Bestätigen Sie die Wiederherstellung</strong>
+                                    <br><small class="text-muted">Sie werden gefragt, ob Sie wirklich alle Daten überschreiben möchten</small>
+                                </li>
+                                <li class="mb-0">
+                                    <strong>Fertig!</strong>
+                                    <br><small class="text-muted">Ihre Daten wurden wiederhergestellt. Die Seite wird automatisch neu geladen</small>
+                                </li>
+                            </ol>
+                        </div>
+                    </div>
+
+                    <h6 class="mt-4 mb-3"><i class="bi bi-3-circle-fill text-primary"></i> Wichtige Hinweise</h6>
+                    <div class="alert alert-warning">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        <strong>Achtung:</strong>
+                        <ul class="mb-0 mt-2">
+                            <li>Beim Restore werden <strong>alle aktuellen Daten überschrieben</strong></li>
+                            <li>Erstellen Sie vorher ein neues Backup, wenn Sie die aktuellen Daten behalten möchten</li>
+                            <li>Nur .json Dateien von dieser Zeiterfassung können wiederhergestellt werden</li>
+                            <li>Die Backup-Datei muss im korrekten Format sein (erstellt durch die Backup-Funktion)</li>
+                        </ul>
+                    </div>
+
+                    <h6 class="mt-4 mb-3"><i class="bi bi-lightbulb text-warning"></i> Tipps</h6>
+                    <div class="card">
+                        <div class="card-body">
+                            <ul class="mb-0">
+                                <li>Erstellen Sie regelmäßig Backups (z.B. am Monatsende)</li>
+                                <li>Benennen Sie Backup-Dateien um, um sie besser zu identifizieren (z.B. "Backup-Dezember-2025.json")</li>
+                                <li>Speichern Sie wichtige Backups an einem sicheren Ort (z.B. Cloud-Speicher, USB-Stick)</li>
+                                <li>Testen Sie gelegentlich, ob Ihre Backups funktionieren</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-primary" data-bs-dismiss="modal">
+                        <i class="bi bi-check-lg"></i> Verstanden
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- END RESTORE HELP MODAL -->
 
     <!-- Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
