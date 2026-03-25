@@ -1,6 +1,6 @@
 # Zeiterfassung Web App
 
-Eine moderne, responsive Web-Anwendung zur Erfassung von Arbeitszeiten mit umfangreichen Funktionen für die tägliche Zeitverwaltung.
+Eine moderne, responsive Web-Anwendung zur Erfassung von Arbeitszeiten mit umfangreichen Funktionen für die tägliche Zeitverwaltung. Vollständig offline nutzbar, alle Daten bleiben lokal im Browser.
 
 ## Funktionen
 
@@ -34,7 +34,15 @@ Eine moderne, responsive Web-Anwendung zur Erfassung von Arbeitszeiten mit umfan
 - **Feiertage**: Automatische Berücksichtigung von Feiertagen nach Bundesland
   - Feiertagsnamen werden in Spalte 1 angezeigt (z.B. "Ostermontag", "Karfreitag")
   - Feiertage werden automatisch als freie Tage markiert
+- **Kranktage**: Separate Erfassung von Krankheitstagen
+  - Kranktage werden wie Urlaubstage erfasst, aber separat gezählt
+  - Eingabe durch "Krank" im Von1-Feld
+  - Automatische Berechnung der Arbeitsstunden basierend auf Beschäftigungsgrad
 - **Druckfunktion**: Professionelle Druckansicht für Monatsübersichten
+  - Optimiert für A4-Format
+  - Zeigt alle relevanten Informationen (Wochentag, Zeiten, Stunden, Gesamt)
+  - Funktioniert sowohl aus Desktop- als auch Mobile-Ansicht
+  - Urlaubstage werden in der Zusammenfassung angezeigt
 
 ### Datenverwaltung
 - **Lokale Speicherung**: Alle Daten werden lokal im Browser gespeichert
@@ -44,9 +52,14 @@ Eine moderne, responsive Web-Anwendung zur Erfassung von Arbeitszeiten mit umfan
 
 ### Benutzerfreundlichkeit
 - **Responsive Design**: Optimiert für Desktop, Tablet und Smartphone
+  - Desktop: Tabellenansicht mit allen Funktionen
+  - Mobile: Card-basierte Ansicht für bessere Touch-Bedienung
+  - Automatischer Wechsel bei Bildschirmbreite < 992px
 - **Intuitive Bedienung**: Einfache und übersichtliche Benutzeroberfläche
-- **Visuelle Rückmeldungen**: Farbliche Kennzeichnung von Wochenenden und Feiertagen
+- **Visuelle Rückmeldungen**: Farbliche Kennzeichnung von Wochenenden, Feiertagen, Urlaubs- und Kranktagen
 - **Schnellaktionen**: Häufig verwendete Funktionen direkt zugänglich
+- **Toast-Benachrichtigungen**: Visuelle Bestätigung bei Aktionen
+- **Editierbare Stunden-Felder**: Manuelle Korrektur von automatisch berechneten Stunden möglich
 
 ## Technische Details
 
@@ -63,10 +76,22 @@ Eine moderne, responsive Web-Anwendung zur Erfassung von Arbeitszeiten mit umfan
 - Safari
 - Opera
 
+### Systemanforderungen
+- Moderner Webbrowser mit JavaScript-Unterstützung
+- LocalStorage-Unterstützung (für Datenspeicherung)
+- Mindestens 1024x768 Bildschirmauflösung empfohlen
+- Internetverbindung nur für Bootstrap CDN erforderlich (optional)
+
 ### Installation
 1. Laden Sie alle Dateien in ein Verzeichnis
 2. Öffnen Sie die `index.html` in einem modernen Webbrowser
 3. Keine Installation oder Server erforderlich
+4. Die App funktioniert vollständig offline (nach erstem Laden)
+
+**Hinweis für Feiertage:**
+- Bei Verwendung mit `file://` Protokoll: Nur Wochenenden werden markiert
+- Bei Verwendung mit Webserver (http/https): Feiertage werden automatisch geladen
+- Feature-Flag in `js/app-v3.js` kann angepasst werden: `FEATURES.FEIERTAGE_LADEN`
 
 ## Verwendung
 
@@ -121,15 +146,67 @@ Eine moderne, responsive Web-Anwendung zur Erfassung von Arbeitszeiten mit umfan
 - Akzeptiert Format HH:MM (z.B. 39:00) oder nur Zahlen (z.B. 40)
 - Zahlen ohne ":" werden automatisch als Stunden interpretiert und als HH:00 gespeichert
 
-## Datenschutz
+### Kranktage erfassen
+1. Geben Sie "Krank" im Von1-Feld ein
+2. Die Stunden werden automatisch basierend auf Ihrem Beschäftigungsgrad berechnet
+3. Kranktage werden separat von Urlaubstagen gezählt
+4. Kranktage erscheinen nicht in der Urlaubstage-Summe
 
-Alle Daten werden ausschließlich lokal im Browser gespeichert. Es erfolgt keine Übertragung an externe Server. Die Daten bleiben vollständig unter Ihrer Kontrolle.
+### Tipps & Tricks
+- **Schnelles Kopieren**: Nutzen Sie die Kopieren/Einfügen-Funktionen für wiederkehrende Arbeitszeiten
+- **Wochenkopie**: Kopieren Sie eine ganze Woche und fügen Sie sie in einer anderen Woche ein
+- **Manuelle Korrektur**: Klicken Sie auf das Stunden-Feld um automatische Berechnungen zu überschreiben
+- **Urlaubsoptimierung**: Nutzen Sie die Optimierungsfunktion für effiziente Urlaubsplanung
+- **Drucken**: Die Druckansicht funktioniert sowohl aus Desktop- als auch Mobile-Ansicht
+
+## Datenschutz & Datensicherheit
+
+### Lokale Datenspeicherung
+- Alle Daten werden ausschließlich lokal im Browser gespeichert (LocalStorage)
+- Es erfolgt keine Übertragung an externe Server
+- Die Daten bleiben vollständig unter Ihrer Kontrolle
+- Keine Cookies, keine Tracking-Mechanismen
+
+### Backup-Empfehlungen
+- Erstellen Sie regelmäßig Backups über die Export-Funktion
+- Backups können als CSV-Dateien gespeichert werden
+- Bei Browser-Datenlöschung gehen LocalStorage-Daten verloren
+- Backups ermöglichen Wiederherstellung auf anderen Geräten
+
+### Datenstruktur
+Die App speichert folgende Daten im LocalStorage:
+- `zeiterfassung_YYYY_MM`: Zeiterfassungsdaten pro Monat
+- `mitarbeiterName`: Name des Mitarbeiters
+- `beschaeftigungsgrad`: Beschäftigungsgrad in Prozent
+- `wochenstunden`: Wochenstunden bei 100%
+- `bundesland`: Gewähltes Bundesland für Feiertage
+- `urlaubstage_index`: Index aller Urlaubstage
+- `uebertrag_YYYY_MM`: Übertrag vom Vormonat
+- `sollStunden_YYYY_MM`: SOLL-Stunden pro Monat
+
+## Sicherheit
+
+Die Anwendung implementiert mehrere Sicherheitsmaßnahmen:
+- **XSS-Schutz**: Alle Benutzereingaben werden escaped und sanitisiert
+- **Input-Validierung**: Strikte Validierung aller Eingaben (Zeitformate, Zahlen, etc.)
+- **Sichere DOM-Manipulation**: Verwendung von `textContent` statt `innerHTML` wo möglich
+- **CSS-Injection-Schutz**: Validierung von CSS-Klassennamen und Attributen
+- **Keine externen Abhängigkeiten**: Nur Bootstrap und Bootstrap Icons von CDN
 
 ## Version
 
-Aktuelle Version: v17.03.2026 23:17
+Aktuelle Version: v25.03.2026 08:17
 
 ### Changelog
+- **v25.03.2026 08:17**:
+  - **Bugfix**: Wochentag wird jetzt korrekt in der Druckansicht angezeigt
+  - Verbesserte Extraktion des Wochentags aus Desktop- und Mobile-Ansicht
+  - Cache-Buster aktualisiert für sofortiges Laden der neuen Version
+- **v24.03.2026**:
+  - Umfangreiches Refactoring (app-v3.js)
+  - Verbesserte Code-Struktur und Wartbarkeit
+  - Eliminierung von Code-Redundanzen
+  - Sicherheitsverbesserungen (XSS-Schutz, Input-Validierung)
 - **v17.03.2026 23:17**:
   - Text-Umbruch in Druckansicht optimiert
   - Alle Debug-Logs entfernt
@@ -142,11 +219,37 @@ Aktuelle Version: v17.03.2026 23:17
   - Spalte "Vor/Nach" umbenannt zu "Vor/Nach/Bem"
 - **v16.03.2026 20:32**: Feiertagsnamen werden jetzt in Spalte 1 angezeigt
 
-## Autor
+## Bekannte Einschränkungen
 
-**Frank Sommer**  
-E-Mail: khsommer@web.de
+- **Feiertage**: Bei Verwendung mit `file://` Protokoll werden keine Feiertage geladen (nur Wochenenden)
+- **Browser-Kompatibilität**: LocalStorage muss aktiviert sein
+- **Datenübertragung**: Keine automatische Synchronisation zwischen Geräten
+- **Druckansicht**: Optimiert für A4-Format, andere Formate können abweichen
 
-## Copyright
+## Fehlerbehebung
+
+### Daten werden nicht gespeichert
+- Prüfen Sie, ob LocalStorage im Browser aktiviert ist
+- Prüfen Sie, ob genügend Speicherplatz verfügbar ist
+- Löschen Sie den Browser-Cache und laden Sie die Seite neu
+
+### Feiertage werden nicht angezeigt
+- Stellen Sie sicher, dass die App über einen Webserver (http/https) läuft
+- Bei `file://` Protokoll: Setzen Sie `FEATURES.FEIERTAGE_LADEN = false` in `js/app-v3.js`
+
+### Druckansicht zeigt keine Daten
+- Laden Sie die Seite neu (Strg+F5 / Cmd+Shift+R)
+- Prüfen Sie, ob Popups für die Seite erlaubt sind
+- Öffnen Sie die Druckansicht über den Drucken-Button in der Hauptansicht
+
+## Support & Kontakt
+
+Bei Fragen oder Problemen:
+- **E-Mail**: khsommer@web.de
+- **Autor**: Frank Sommer
+
+## Lizenz & Copyright
 
 © 2026 Frank Sommer. Alle Rechte vorbehalten.
+
+Diese Software wird "wie besehen" zur Verfügung gestellt, ohne jegliche ausdrückliche oder stillschweigende Gewährleistung.

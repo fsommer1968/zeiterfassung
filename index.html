@@ -23,7 +23,7 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/style.css?v=20260324a">
 </head>
 <body>
     <!-- Navigation -->
@@ -33,7 +33,7 @@
                 <i class="bi bi-clock-history"></i> Zeiterfassung
             </a>
             <span class="navbar-text text-white" style="font-size: 0.85em; opacity: 0.8;">
-                v18.03.2026 12:32
+                v25.03.2026 08:17
             </span>
         </div>
     </nav>
@@ -45,25 +45,9 @@
             <div class="col-12">
                 <div class="card shadow-sm">
                     <div class="card-body">
-                        <!-- Stammdaten -->
-                        <div class="row mb-3">
-                            <div class="col-md-4 mb-3 mb-md-0">
-                                <label for="mitarbeiterName" class="form-label fw-bold">Name:</label>
-                                <input type="text" class="form-control" id="mitarbeiterName" placeholder="Vor- und Nachname">
-                            </div>
-                            <div class="col-md-4 mb-3 mb-md-0">
-                                <label for="beschaeftigungsgrad" class="form-label fw-bold">Beschäftigungsgrad:</label>
-                                <input type="text" class="form-control" id="beschaeftigungsgrad" placeholder="z.B. 100%, 80%, 50%">
-                            </div>
-                            <div class="col-md-4 mb-3 mb-md-0">
-                                <label for="urlaubstageProJahr" class="form-label fw-bold">Urlaubstage/Jahr:</label>
-                                <input type="number" class="form-control" id="urlaubstageProJahr" placeholder="z.B. 30" min="0" max="365">
-                            </div>
-                        </div>
-                        
                         <!-- Monatsauswahl und SOLL-Stunden -->
-                        <div class="row align-items-end">
-                            <div class="col-md-3 col-6 mb-3 mb-md-0">
+                        <div class="row align-items-end mb-3">
+                            <div class="col-md-2 col-6 mb-3 mb-md-0">
                                 <label for="jahrSelect" class="form-label fw-bold">Jahr:</label>
                                 <select class="form-select" id="jahrSelect">
                                     <!-- Wird dynamisch gefüllt -->
@@ -86,7 +70,13 @@
                                     <option value="11">Dezember</option>
                                 </select>
                             </div>
-                            <div class="col-md-6 col-12">
+                            <div class="col-md-2 col-12 mb-3 mb-md-0">
+                                <label class="form-label fw-bold d-none d-md-block">&nbsp;</label>
+                                <button class="btn btn-outline-primary w-100" type="button" id="btnMonatNeuLaden" title="Monat neu laden">
+                                    <i class="bi bi-arrow-clockwise"></i> Neu laden
+                                </button>
+                            </div>
+                            <div class="col-md-5 col-12">
                                 <label for="sollStunden" class="form-label fw-bold">
                                     <i class="bi bi-clock"></i> SOLL-Stunden:
                                 </label>
@@ -216,9 +206,16 @@
                                 <button class="btn btn-outline-success" id="btnMobileImportCSV">
                                     <i class="bi bi-file-earmark-arrow-up"></i> CSV Import
                                 </button>
-                                <button class="btn btn-outline-warning" id="btnMobileBackup">
-                                    <i class="bi bi-cloud-download"></i> Backup erstellen
-                                </button>
+                                <div class="d-flex gap-2 align-items-center">
+                                    <button class="btn btn-outline-warning flex-grow-1" id="btnMobileBackup">
+                                        <i class="bi bi-cloud-download"></i> Backup erstellen
+                                    </button>
+                                    <!-- BACKUP HELP: Kann bei Bedarf entfernt werden -->
+                                    <button type="button" class="btn btn-outline-info btn-sm" data-bs-toggle="modal" data-bs-target="#backupHelpModal" title="Backup-Hilfe">
+                                        <i class="bi bi-question-circle"></i> Hilfe
+                                    </button>
+                                    <!-- END BACKUP HELP -->
+                                </div>
                                 <div class="d-flex gap-2 align-items-center">
                                     <button class="btn btn-outline-warning flex-grow-1" id="btnMobileRestore">
                                         <i class="bi bi-cloud-upload"></i> Restore
@@ -242,6 +239,9 @@
                                         </button>
                                     </div>
                                     <small class="text-muted">Format: HH:MM (z.B. 39:00 oder 40:30)</small>
+                                    <small class="text-muted d-block mt-1" id="stundenProTagMobile">
+                                        <i class="bi bi-info-circle"></i> <span id="stundenProTagWertMobile">7:48</span> Stunden/Tag (bei 5-Tage-Woche, inkl. Beschäftigungsgrad)
+                                    </small>
                                 </div>
                                 <div class="mb-2">
                                     <label for="bundeslandMobile" class="form-label mb-1">
@@ -329,6 +329,11 @@
                             <button type="button" class="btn btn-outline-warning" id="btnBackup">
                                 <i class="bi bi-cloud-download"></i> Backup
                             </button>
+                            <!-- BACKUP HELP: Kann bei Bedarf entfernt werden -->
+                            <button type="button" class="btn btn-outline-info btn-sm" data-bs-toggle="modal" data-bs-target="#backupHelpModal" title="Backup-Hilfe">
+                                <i class="bi bi-question-circle"></i>
+                            </button>
+                            <!-- END BACKUP HELP -->
                             <button type="button" class="btn btn-outline-warning" id="btnRestore">
                                 <i class="bi bi-cloud-upload"></i> Restore
                             </button>
@@ -338,8 +343,31 @@
                             </button>
                             <!-- END RESTORE HELP -->
                         </div>
+                        
+                        <!-- Stammdaten und Einstellungen -->
                         <div class="row mt-3">
-                            <div class="col-md-6">
+                            <div class="col-md-4 mb-3">
+                                <label for="mitarbeiterName" class="form-label fw-bold">
+                                    <i class="bi bi-person"></i> Name:
+                                </label>
+                                <input type="text" class="form-control" id="mitarbeiterName" placeholder="Vor- und Nachname">
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label for="beschaeftigungsgrad" class="form-label fw-bold">
+                                    <i class="bi bi-percent"></i> Beschäftigungsgrad:
+                                </label>
+                                <input type="text" class="form-control" id="beschaeftigungsgrad" placeholder="z.B. 100%, 80%, 50%">
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label for="urlaubstageProJahr" class="form-label fw-bold">
+                                    <i class="bi bi-calendar-check"></i> Urlaubstage/Jahr:
+                                </label>
+                                <input type="number" class="form-control" id="urlaubstageProJahr" placeholder="z.B. 30" min="0" max="365">
+                            </div>
+                        </div>
+                        
+                        <div class="row">
+                            <div class="col-md-4 mb-3">
                                 <label for="wochenstunden" class="form-label fw-bold">
                                     <i class="bi bi-clock-history"></i> Wochenstunden bei 100%:
                                 </label>
@@ -351,8 +379,11 @@
                                     </button>
                                 </div>
                                 <small class="text-muted">Format: HH:MM (z.B. 39:00 oder 40:30)</small>
+                                <small class="text-muted d-block mt-1" id="stundenProTagDesktop">
+                                    <i class="bi bi-info-circle"></i> <span id="stundenProTagWertDesktop">7:48</span> Stunden/Tag (bei 5-Tage-Woche, inkl. Beschäftigungsgrad)
+                                </small>
                             </div>
-                            <div class="col-md-6">
+                            <div class="col-md-4 mb-3">
                                 <label for="bundesland" class="form-label fw-bold">
                                     <i class="bi bi-geo-alt"></i> Bundesland (Feiertage):
                                 </label>
@@ -405,17 +436,36 @@
                 <div class="modal-body">
                     <!-- Urlaubstage hinzufügen -->
                     <div class="row mb-3">
-                        <div class="col-md-4 mb-2">
+                        <div class="col-md-3 mb-2">
                             <label for="urlaubVon" class="form-label fw-bold">Von:</label>
                             <input type="date" class="form-control" id="urlaubVon">
+                            <small class="text-muted">Für einzelnen Tag nur "Von" ausfüllen</small>
                         </div>
-                        <div class="col-md-4 mb-2">
-                            <label for="urlaubBis" class="form-label fw-bold">Bis:</label>
+                        <div class="col-md-3 mb-2">
+                            <label for="urlaubBis" class="form-label fw-bold">Bis (optional):</label>
                             <input type="date" class="form-control" id="urlaubBis">
+                            <small class="text-muted">Nur für mehrere Tage erforderlich</small>
                         </div>
-                        <div class="col-md-4 mb-2">
+                        <div class="col-md-3 mb-2">
+                            <label class="form-label fw-bold d-block">Optionen:</label>
+                            <div class="d-flex gap-3">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="istKrank">
+                                    <label class="form-check-label" for="istKrank">
+                                        <i class="bi bi-thermometer-half text-danger"></i> Krank
+                                    </label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="halberTag">
+                                    <label class="form-check-label" for="halberTag">
+                                        <i class="bi bi-clock"></i> Halber Tag
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3 mb-2">
                             <label class="form-label fw-bold d-block">&nbsp;</label>
-                            <button class="btn btn-success w-100" id="btnUrlaubHinzufuegen">
+                            <button class="btn btn-success w-100" onclick="fuegeUrlaubHinzu(document.getElementById('urlaubVon').value, document.getElementById('urlaubBis').value)">
                                 <i class="bi bi-plus-circle"></i> Hinzufügen
                             </button>
                         </div>
@@ -558,6 +608,94 @@
         </div>
     </div>
 
+    <!-- BACKUP HELP MODAL: Kann bei Bedarf entfernt werden -->
+    <div class="modal fade" id="backupHelpModal" tabindex="-1" aria-labelledby="backupHelpModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header bg-warning text-dark">
+                    <h5 class="modal-title" id="backupHelpModalLabel">
+                        <i class="bi bi-question-circle"></i> Anleitung: Backup erstellen
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle"></i>
+                        <strong>Was ist ein Backup?</strong>
+                        <p class="mb-0 mt-2">Mit der Backup-Funktion können Sie alle Ihre Zeiterfassungsdaten sichern. Die Backup-Datei enthält alle Einträge, Einstellungen und Stammdaten und kann später wiederhergestellt werden.</p>
+                    </div>
+
+                    <h6 class="mt-4 mb-3"><i class="bi bi-1-circle-fill text-primary"></i> Wie erstelle ich ein Backup?</h6>
+                    <div class="card mb-3">
+                        <div class="card-body">
+                            <ol class="mb-0">
+                                <li class="mb-2">
+                                    <strong>Klicken Sie auf den "Backup"-Button</strong>
+                                    <br><small class="text-muted">Der Button befindet sich bei den Schnellaktionen (gelb/orange mit Cloud-Download-Symbol)</small>
+                                </li>
+                                <li class="mb-2">
+                                    <strong>Die Backup-Datei wird automatisch heruntergeladen</strong>
+                                    <br><small class="text-muted">Die Datei wird im JSON-Format gespeichert und enthält alle Ihre Daten</small>
+                                </li>
+                                <li class="mb-0">
+                                    <strong>Fertig!</strong>
+                                    <br><small class="text-muted">Ihre Backup-Datei wurde erfolgreich erstellt</small>
+                                </li>
+                            </ol>
+                        </div>
+                    </div>
+
+                    <h6 class="mt-4 mb-3"><i class="bi bi-2-circle-fill text-primary"></i> Wo wird die Backup-Datei gespeichert?</h6>
+                    <div class="card mb-3">
+                        <div class="card-body">
+                            <p class="mb-2"><strong>Die Backup-Datei wird automatisch in Ihren Download-Ordner heruntergeladen:</strong></p>
+                            <ul class="mb-2">
+                                <li><strong>Windows:</strong> Normalerweise im Ordner <code>Downloads</code> oder <code>C:\Users\[IhrName]\Downloads</code></li>
+                                <li><strong>Mac:</strong> Im Ordner <code>Downloads</code> oder <code>/Users/[IhrName]/Downloads</code></li>
+                                <li><strong>Smartphone/Tablet:</strong> Im Download-Ordner Ihres Geräts</li>
+                            </ul>
+                            <p class="mb-0"><strong>Dateiname:</strong> Die Datei heißt z.B. <code>zeiterfassung-backup-2026-03-18.json</code></p>
+                        </div>
+                    </div>
+
+                    <h6 class="mt-4 mb-3"><i class="bi bi-3-circle-fill text-primary"></i> Was enthält die Backup-Datei?</h6>
+                    <div class="card mb-3">
+                        <div class="card-body">
+                            <p class="mb-2"><strong>Die Backup-Datei enthält:</strong></p>
+                            <ul class="mb-0">
+                                <li>Alle Zeiterfassungseinträge (Von/Bis-Zeiten, Bemerkungen)</li>
+                                <li>Stammdaten (Name, Beschäftigungsgrad, Urlaubstage)</li>
+                                <li>SOLL-Stunden für alle Monate</li>
+                                <li>Überträge aus Vormonaten</li>
+                                <li>Einstellungen (Wochenstunden, Bundesland)</li>
+                                <li>Urlaubskalender-Einträge</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <h6 class="mt-4 mb-3"><i class="bi bi-lightbulb text-warning"></i> Tipps</h6>
+                    <div class="card">
+                        <div class="card-body">
+                            <ul class="mb-0">
+                                <li>Erstellen Sie regelmäßig Backups (z.B. am Monatsende)</li>
+                                <li>Benennen Sie Backup-Dateien um, um sie besser zu identifizieren (z.B. "Backup-Dezember-2025.json")</li>
+                                <li>Speichern Sie wichtige Backups an einem sicheren Ort (z.B. Cloud-Speicher, USB-Stick)</li>
+                                <li>Bewahren Sie mehrere Backups auf (z.B. monatlich)</li>
+                                <li>Testen Sie gelegentlich, ob Ihre Backups funktionieren (mit der Restore-Funktion)</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-primary" data-bs-dismiss="modal">
+                        <i class="bi bi-check-lg"></i> Verstanden
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- END BACKUP HELP MODAL -->
+
     <!-- RESTORE HELP MODAL: Kann bei Bedarf entfernt werden -->
     <div class="modal fade" id="restoreHelpModal" tabindex="-1" aria-labelledby="restoreHelpModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
@@ -649,7 +787,7 @@
     <!-- Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     
-    <!-- Custom JS - VERSION 3 mit verbessertem Event-Handling -->
-    <script src="js/app-v3.js"></script>
+    <!-- Custom JS - VERSION 3 mit Refactoring & Redundanz-Eliminierung -->
+    <script src="js/app-v3.js?v=20260325b"></script>
 </body>
 </html>

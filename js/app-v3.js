@@ -10,6 +10,24 @@ const FEATURES = {
                            // false = Nur Wochenenden markieren (funktioniert mit file://)
 };
 
+// ===================================
+// KONSTANTEN
+// ===================================
+const DEFAULT_WOCHENSTUNDEN = 39.0;
+const ARBEITSTAGE_PRO_WOCHE = 5;
+const MINUTEN_PRO_STUNDE = 60;
+const MOBILE_BREAKPOINT = 992;
+// Feldnamen-Konstanten für Zeiterfassung
+const FIELDS = {
+    VON1: 'von1',
+    BIS1: 'bis1',
+    VON2: 'von2',
+    BIS2: 'bis2',
+    VORNACH: 'vornach',
+    STUNDEN: 'stunden'
+};
+
+
 // Globale Variablen
 let aktuellesJahr = new Date().getFullYear();
 let aktuellerMonat = new Date().getMonth();
@@ -21,9 +39,11 @@ let kopierterTag = null; // Zwischenspeicher für kopierten Tag
 let kopierterTagDaten = null; // Daten des kopierten Tags
 let kopierteWoche = null; // Zwischenspeicher für kopierte Woche (Sonntag-Tag)
 let kopierteWocheDaten = null; // Array mit 7 Tagen Daten
-let wochenstunden = 39.0; // Standard-Wochenstunden bei 100%
+let wochenstunden = DEFAULT_WOCHENSTUNDEN; // Standard-Wochenstunden bei 100%
 let bundesland = 'BW'; // Standard-Bundesland für Feiertage
 let urlaubstage = []; // DEPRECATED: Wird nicht mehr verwendet, nur für Kompatibilität
+let speicherQueue = []; // Queue für Speicheroperationen
+let speicherQueueAktiv = false; // Flag ob Queue gerade abgearbeitet wird
 
 // Deutsche Monatsnamen
 const MONATSNAMEN = [
@@ -33,6 +53,440 @@ const MONATSNAMEN = [
 
 // Deutsche Wochentage (kurz)
 const WOCHENTAGE = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+// ===================================
+// SICHERHEITS-FUNKTIONEN (XSS-Schutz)
+// ===================================
+
+/**
+ * Escaped HTML-Sonderzeichen um XSS-Angriffe zu verhindern
+ * @param {string} text - Der zu escapende Text
+ * @returns {string} - Der gesicherte Text
+ */
+function escapeHtml(text) {
+    if (text === null || text === undefined) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+/**
+ * Sanitisiert Benutzereingaben um XSS-Angriffe zu verhindern
+ * @param {string} input - Die zu bereinigende Eingabe
+ * @param {number} maxLength - Maximale Länge (Standard: 1000)
+ * @returns {string} - Die bereinigte Eingabe
+ */
+function sanitizeInput(input, maxLength = 1000) {
+    if (input === null || input === undefined) return '';
+    
+    return String(input)
+        .replace(/[<>\"'`]/g, '') // Entferne HTML/JS-gefährliche Zeichen
+        .trim()
+        .substring(0, maxLength); // Begrenze Länge
+}
+
+
+/**
+ * Erstellt ein HTML-Element sicher mit textContent statt innerHTML
+ *
+ * SICHERHEIT:
+ * - Validiert CSS-Klassennamen (nur alphanumerisch, Bindestrich, Unterstrich)
+ * - Blockiert Event-Handler-Attribute (onclick, onload, etc.)
+ * - Whitelist für erlaubte Attribute
+ * - Sanitisiert Attributwerte (entfernt <, >, ", ', `)
+ * - Verhindert XSS und CSS-Injection Angriffe
+ *
+ * @param {string} tag - Der HTML-Tag-Name (z.B. 'div', 'span')
+ * @param {Object} options - Optionen für das Element
+ * @param {string} options.className - CSS-Klassen (werden validiert)
+ * @param {string} options.text - Textinhalt (wird escaped via textContent)
+ * @param {Object} options.style - Style-Objekt
+ * @param {Object} options.attributes - Weitere Attribute (werden validiert)
+ * @returns {HTMLElement} - Das erstellte Element
+ */
+function createElementSafe(tag, options = {}) {
+    const element = document.createElement(tag);
+    
+    // Whitelist erlaubter Attribute (keine Event-Handler!)
+    const SAFE_ATTRIBUTES = [
+        'data-field', 'data-tag', 'data-datum', 'placeholder', 'type', 
+        'id', 'name', 'value', 'role', 'aria-label', 'aria-labelledby',
+        'aria-describedby', 'title', 'alt', 'href', 'target', 'rel',
+        'for', 'tabindex', 'disabled', 'readonly', 'required', 'min', 
+        'max', 'step', 'pattern', 'autocomplete', 'spellcheck'
+    ];
+    
+    if (options.className) {
+        // Nur alphanumerische Zeichen, Bindestriche und Unterstriche erlauben
+        // Keine Sonderzeichen, die für CSS-Injection missbraucht werden könnten
+        const sanitizedClassName = options.className
+            .split(/\s+/)
+            .filter(cls => {
+                // Prüfe auf gültiges CSS-Klassen-Format
+                // Erlaubt: a-z, A-Z, 0-9, Bindestrich, Unterstrich
+                return cls && /^[a-zA-Z0-9_-]+$/.test(cls);
+            })
+            .join(' ');
+        
+        if (sanitizedClassName) {
+            element.className = sanitizedClassName;
+        }
+    }
+    
+    if (options.text !== undefined) {
+        element.textContent = options.text;
+    }
+    
+    if (options.style) {
+        Object.assign(element.style, options.style);
+    }
+    
+    if (options.attributes) {
+        Object.entries(options.attributes).forEach(([key, value]) => {
+            // Blockiere Event-Handler (on*) und andere gefährliche Attribute
+            const keyLower = key.toLowerCase();
+            
+            if (SAFE_ATTRIBUTES.includes(keyLower) && !keyLower.startsWith('on')) {
+                // Konvertiere Wert zu String und entferne potentiell gefährliche Zeichen
+                const sanitizedValue = String(value)
+                    .replace(/[<>\"'`]/g, '') // Entferne HTML/JS-gefährliche Zeichen
+                    .substring(0, 1000); // Begrenze Länge
+                
+                element.setAttribute(key, sanitizedValue);
+            } else {
+                console.warn(`[Security] Blocked unsafe attribute: "${key}"`);
+            }
+        });
+    }
+    
+    return element;
+}
+
+
+/**
+ * Erstellt sicher ein Element mit mehreren Kindern
+ * @param {string} tag - Der HTML-Tag-Name
+ * @param {Object} options - Optionen (wie createElementSafe)
+ * @param {Array<HTMLElement|string>} children - Array von Kind-Elementen oder Texten
+ * @returns {HTMLElement} - Das erstellte Element mit Kindern
+ */
+function createElementWithChildren(tag, options = {}, children = []) {
+    const element = createElementSafe(tag, options);
+    
+    children.forEach(child => {
+        if (typeof child === 'string') {
+            element.appendChild(document.createTextNode(child));
+        } else if (child instanceof HTMLElement) {
+            element.appendChild(child);
+        }
+    });
+    
+    return element;
+}
+
+/**
+ * Setzt sicher HTML-Inhalt mit Text und Formatierung
+ * Verwendet für Fälle wo <br>, <small> etc. benötigt werden
+ * @param {HTMLElement} element - Das Ziel-Element
+ * @param {string} mainText - Haupttext (wird escaped)
+ * @param {Object} options - Optionen für zusätzlichen Inhalt
+ * @param {string} options.subText - Untertext (wird escaped)
+ * @param {string} options.subTextStyle - CSS-Style für Untertext
+ * @param {string} options.subTextColor - Farbe für Untertext
+ */
+function setElementContentSafe(element, mainText, options = {}) {
+    // Lösche vorhandenen Inhalt
+    element.textContent = '';
+    
+    // Füge Haupttext hinzu
+    element.appendChild(document.createTextNode(mainText));
+    
+    // Füge optionalen Untertext hinzu
+    if (options.subText) {
+        element.appendChild(document.createElement('br'));
+        
+        const small = createElementSafe('small', {
+            text: options.subText,
+            style: {
+                fontWeight: 'normal',
+                fontSize: '0.8em',
+                ...(options.subTextColor && { color: options.subTextColor })
+            }
+        });
+        
+        if (options.subTextStyle) {
+            Object.assign(small.style, options.subTextStyle);
+        }
+        
+        element.appendChild(small);
+    }
+}
+/**
+ * Erstellt sicher den Header für eine Mobile Card
+ * @param {number} tag - Tag-Nummer
+ * @param {string} wochentag - Wochentag
+ * @param {boolean} istUrlaub - Ist Urlaubstag
+ * @param {boolean} istKrank - Ist Kranktag
+ * @param {string} feiertagName - Name des Feiertags (optional)
+ * @param {boolean} istWochenende - Ist Wochenende
+ * @returns {HTMLElement} - Der Header-Container
+ */
+function erstelleMobileCardHeader(tag, wochentag, istUrlaub, istKrank, feiertagName, istWochenende) {
+    // Helper: Bestimmt den Icon-Typ basierend auf Tag-Status
+    function getIconType(istUrlaub, istKrank, istWochenende) {
+        if (istUrlaub && istKrank) return 'heart-pulse';
+        if (istUrlaub) return 'calendar-check';
+        if (istWochenende) return 'moon';
+        return 'sun';
+    }
+    
+    // Helper: Erstellt einen Status-Span mit optionaler Farbe
+    function createStatusSpan(text, color = null) {
+        return createElementSafe('span', {
+            text,
+            style: {
+                fontSize: '0.85em',
+                ...(color && { color })
+            }
+        });
+    }
+    
+    const header = document.createElement('div');
+    header.className = `day-card-header ${istWochenende ? 'weekend-header' : ''} ${istUrlaub ? 'urlaub-header' : ''}`;
+    
+    // Linke Seite: Tag und Wochentag
+    const leftDiv = document.createElement('div');
+    
+    const dayNumber = createElementSafe('div', {
+        className: 'day-number',
+        text: tag.toString()
+    });
+    leftDiv.appendChild(dayNumber);
+    
+    const dayName = createElementSafe('div', {
+        className: 'day-name'
+    });
+    dayName.textContent = wochentag;
+    
+    // Füge Status-Span hinzu wenn nötig
+    if (istUrlaub) {
+        dayName.appendChild(document.createTextNode(' '));
+        const statusText = istKrank ? '(Krank)' : '(Urlaub)';
+        const statusColor = istKrank ? '#f8d7da' : '#d4edda';
+        dayName.appendChild(createStatusSpan(statusText, statusColor));
+    } else if (feiertagName) {
+        dayName.appendChild(document.createTextNode(' '));
+        dayName.appendChild(createStatusSpan(`(${feiertagName})`));
+    }
+    
+    leftDiv.appendChild(dayName);
+    header.appendChild(leftDiv);
+    
+    // Rechte Seite: Icon
+    const rightDiv = document.createElement('div');
+    const iconType = getIconType(istUrlaub, istKrank, istWochenende);
+    const icon = document.createElement('i');
+    icon.className = `bi bi-${iconType}`;
+    rightDiv.appendChild(icon);
+    header.appendChild(rightDiv);
+    
+    return header;
+}
+
+/**
+ * Erstellt sicher ein Input-Feld für die Mobile Card
+ * @param {string} label - Label-Text
+ * @param {string} field - Feldname (data-field)
+ * @param {string} value - Wert (optional)
+ * @param {boolean} isCalculated - Ist berechnetes Feld
+ * @returns {HTMLElement} - Das Input-Container-Element
+ */
+function erstelleMobileInputFeld(label, field, value = '', isCalculated = false) {
+    const container = createElementSafe('div', {
+        className: 'time-field'
+    });
+    
+    const labelEl = createElementSafe('label', {
+        text: label
+    });
+    container.appendChild(labelEl);
+    
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = `time-input${isCalculated ? ' calculated-field' : ''}`;
+    input.placeholder = 'HH:MM';
+    input.dataset.field = field;
+    if (value) {
+        input.value = value;
+    }
+    container.appendChild(input);
+    
+    return container;
+}
+
+
+
+// ===================================
+// LocalStorage Utility-Funktionen
+// ===================================
+
+/**
+ * Holt den Urlaubstage-Index aus dem LocalStorage
+ * @returns {Set} - Set mit allen Datumstrings die Urlaubstage haben
+ */
+function holeUrlaubstageIndex() {
+    const indexJson = localStorage.getItem('urlaub_index');
+    return indexJson ? new Set(JSON.parse(indexJson)) : new Set();
+}
+
+/**
+ * Speichert den Urlaubstage-Index im LocalStorage
+ * @param {Set} index - Set mit allen Datumstrings
+ */
+function speichereUrlaubstageIndex(index) {
+    localStorage.setItem('urlaub_index', JSON.stringify([...index]));
+}
+
+/**
+ * Setzt einen Urlaubstag-Eintrag im LocalStorage
+ * @param {Date} datum - Das Datum
+ * @param {number} tage - Anzahl der Urlaubstage (0, 0.5, 1, etc.)
+ */
+function setzeUrlaubstag(datum, tage) {
+    const datumString = formatiereDatumLokal(datum);
+    const key = `urlaub_tage_${datumString}`;
+    localStorage.setItem(key, tage.toString());
+    
+    // Aktualisiere Index
+    const index = holeUrlaubstageIndex();
+    index.add(datumString);
+    speichereUrlaubstageIndex(index);
+}
+
+/**
+ * Holt einen Urlaubstag-Eintrag aus dem LocalStorage
+ * @param {Date} datum - Das Datum
+ * @returns {number} - Anzahl der Urlaubstage (0 wenn nicht vorhanden)
+ */
+function holeUrlaubstag(datum) {
+    const datumString = formatiereDatumLokal(datum);
+    const key = `urlaub_tage_${datumString}`;
+    const wert = localStorage.getItem(key);
+    const parsed = wert ? parseFloat(wert) : 0;
+    return parsed > 0 ? parsed : 0;
+}
+
+/**
+ * Setzt den Krank-Status für ein Datum
+ * @param {Date} datum - Das Datum
+ * @param {boolean} istKrank - true wenn Kranktag, false sonst
+ */
+function setzeKrankstatus(datum, istKrank) {
+    const datumString = formatiereDatumLokal(datum);
+    const key = `krank_${datumString}`;
+    localStorage.setItem(key, istKrank ? 'true' : 'false');
+}
+
+/**
+ * Holt den Krank-Status für ein Datum
+ * @param {Date} datum - Das Datum
+ * @returns {boolean} - true wenn Kranktag, false sonst
+ */
+function holeKrankstatus(datum) {
+    const datumString = formatiereDatumLokal(datum);
+    const key = `krank_${datumString}`;
+    const wert = localStorage.getItem(key);
+    return wert === 'true';
+}
+
+/**
+ * Löscht Urlaubstag und Krank-Status für ein Datum (setzt auf 0/false)
+ * @param {Date} datum - Das Datum
+ */
+function loescheUrlaubUndKrank(datum) {
+    const datumString = formatiereDatumLokal(datum);
+    localStorage.setItem(`urlaub_tage_${datumString}`, "0");
+    localStorage.setItem(`krank_${datumString}`, "false");
+}
+
+/**
+ * Erstellt ein Datum-Objekt für einen Tag im aktuellen Monat
+ * @param {number} tag - Der Tag im Monat (1-31)
+ * @returns {Date} - Das Datum-Objekt
+ */
+function erstelleDatumFuerTag(tag) {
+    return new Date(aktuellesJahr, aktuellerMonat, tag);
+}
+
+/**
+ * Löscht ALLE Einträge für einen Tag (Urlaub, Krank, Zeiten)
+ * @param {number} tag - Der Tag im Monat (1-31)
+ */
+function loescheTagKomplett(tag) {
+    // Rückfrage
+    const datum = erstelleDatumFuerTag(tag);
+    const datumFormatiert = datum.toLocaleDateString('de-DE', {
+        weekday: 'long',
+        day: '2-digit',
+        month: 'long',
+        year: 'numeric'
+    });
+    
+    if (!confirm(`Möchten Sie wirklich ALLE Einträge für ${datumFormatiert} löschen?\n\nDies umfasst:\n• Alle Zeiten (Von/Bis)\n• Bemerkungen\n• Urlaubs-/Kranktagsmarkierungen\n\nDieser Vorgang kann nicht rückgängig gemacht werden!`)) {
+        return;
+    }
+    
+    // Lösche Urlaub und Krank-Status
+    loescheUrlaubUndKrank(datum);
+    
+    // Lösche alle Zeitdaten aus zeiterfassungDaten
+    const monatsKey = getMonatsKey(aktuellesJahr, aktuellerMonat);
+    if (zeiterfassungDaten[monatsKey] && zeiterfassungDaten[monatsKey].tage && zeiterfassungDaten[monatsKey].tage[tag]) {
+        delete zeiterfassungDaten[monatsKey].tage[tag];
+    }
+    
+    // Speichere Änderungen
+    speichereDatenInLocalStorage();
+    
+    // Entferne aus ungespeicherten Tagen
+    ungespeicherteTage.delete(tag);
+    
+    // Lade Monat neu, um die Anzeige zu aktualisieren
+    ladeMonat(aktuellesJahr, aktuellerMonat);
+    
+    zeigeToast(`Alle Einträge für ${datumFormatiert} wurden gelöscht`, 'info');
+}
+// ============================================================================
+// DOM & UI UTILITIES
+// ============================================================================
+
+/**
+ * Zeigt ein Bootstrap Modal an
+ * @param {string} modalId - Die ID des Modal-Elements
+ */
+function zeigeModal(modalId) {
+    const modal = new bootstrap.Modal(document.getElementById(modalId));
+    modal.show();
+}
+
+/**
+ * Schließt das mobile Menü
+ */
+function schliesseMobileMenu() {
+    const mobileMenu = document.getElementById('mobileMenu');
+    if (mobileMenu) {
+        const bsCollapse = new bootstrap.Collapse(mobileMenu, { toggle: false });
+        bsCollapse.hide();
+    }
+}
+
+/**
+ * Holt ein DOM-Element sicher per ID
+ * @param {string} id - Die Element-ID
+ * @returns {HTMLElement|null} Das Element oder null
+ */
+function holeElement(id) {
+    return document.getElementById(id);
+}
+
 
 // ===================================
 // Urlaubskalender Funktionen (müssen vor DOMContentLoaded definiert sein)
@@ -51,19 +505,24 @@ function getBeschaeftigungsgrad() {
             return 1.0; // Standard: 100%
         }
         
-        if (bgString.includes('%')) {
-            const value = parseFloat(bgString.replace('%', ''));
+        // Sanitisierung: Alle nicht-numerischen Zeichen außer Punkt und % entfernen
+        const sanitized = bgString.replace(/[^\d.%]/g, '');
+        
+        // Prüfen ob genau ein % am Ende steht
+        if (sanitized.endsWith('%') && sanitized.indexOf('%') === sanitized.length - 1) {
+            const value = parseFloat(sanitized.slice(0, -1));
             return isNaN(value) ? 1.0 : value / 100;
+        }
+        
+        // Kein % oder ungültiges Format - als Dezimalwert behandeln
+        const bgValue = parseFloat(sanitized);
+        if (isNaN(bgValue)) {
+            return 1.0; // Standard: 100%
+        }
+        if (bgValue > 1) {
+            return bgValue / 100; // 80 -> 0.8
         } else {
-            const bgValue = parseFloat(bgString);
-            if (isNaN(bgValue)) {
-                return 1.0; // Standard: 100%
-            }
-            if (bgValue > 1) {
-                return bgValue / 100; // 80 -> 0.8
-            } else {
-                return bgValue; // 0.8 -> 0.8
-            }
+            return bgValue; // 0.8 -> 0.8
         }
     } catch (error) {
         return 1.0; // Standard: 100%
@@ -73,7 +532,7 @@ function getBeschaeftigungsgrad() {
 // Hilfsfunktion: Berechne tägliche Arbeitsstunden für Urlaub
 function berechneTaeglicheUrlaubsstunden() {
     const beschaeftigungsgrad = getBeschaeftigungsgrad();
-    const tagesStunden = (wochenstunden * beschaeftigungsgrad) / 5;
+    const tagesStunden = (wochenstunden * beschaeftigungsgrad) / ARBEITSTAGE_PRO_WOCHE;
     return tagesStunden;
 }
 
@@ -94,6 +553,90 @@ function ladeUrlaubstage() {
     if (document.getElementById('urlaubsliste')) {
         aktualisiereUrlaubsliste();
     }
+}
+
+// Zeige alle urlaub_tage_* Einträge im LocalStorage (für Debugging)
+function zeigeAlleUrlaubstageImLocalStorage() {
+    const index = holeUrlaubstageIndex();
+    index.forEach(datumString => {
+        const key = `urlaub_tage_${datumString}`;
+        const value = localStorage.getItem(key);
+    });
+}
+
+// Bereinige Dummy-Einträge (urlaub_tage_* = "0" und krank_* = "false") aus dem vorherigen Monat
+function bereinigeDummyEintraege() {
+    
+    // Berechne vorherigen Monat
+    const heute = new Date();
+    const vorherigerMonat = new Date(heute.getFullYear(), heute.getMonth() - 1, 1);
+    const vorherigerMonatsKey = `${vorherigerMonat.getFullYear()}-${String(vorherigerMonat.getMonth() + 1).padStart(2, '0')}`;
+    
+    let geloescht = 0;
+    const index = holeUrlaubstageIndex();
+    const zuLoeschende = [];
+    
+    // Prüfe nur Einträge aus dem Index
+    index.forEach(datumString => {
+        const monatsKey = datumString.substring(0, 7); // YYYY-MM
+        
+        // Nur Einträge aus vorherigem Monat prüfen
+        if (monatsKey === vorherigerMonatsKey) {
+            const urlaubKey = `urlaub_tage_${datumString}`;
+            const krankKey = `krank_${datumString}`;
+            const urlaubWert = localStorage.getItem(urlaubKey);
+            const krankWert = localStorage.getItem(krankKey);
+            
+            // Lösche Dummy-Einträge (urlaub_tage_* = "0" oder krank_* = "false")
+            if (urlaubWert === "0") {
+                zuLoeschende.push({ key: urlaubKey, datumString });
+            }
+            if (krankWert === "false") {
+                zuLoeschende.push({ key: krankKey, datumString: null });
+            }
+        }
+    });
+    
+    // Lösche Dummy-Einträge
+    zuLoeschende.forEach(item => {
+        localStorage.removeItem(item.key);
+        if (item.datumString) {
+            index.delete(item.datumString);
+        }
+        geloescht++;
+    });
+    
+    if (geloescht > 0) {
+        speichereUrlaubstageIndex(index);
+    }
+}
+
+// Bereinige verwaiste krank_* Einträge (ohne zugehörige urlaub_tage_* Einträge)
+function bereinigeVerwaisteKranktage() {
+    const zuLoeschende = [];
+    
+    // Durchsuche alle LocalStorage-Keys
+    for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        
+        // Prüfe ob es ein krank_* Eintrag ist
+        if (key && key.startsWith('krank_')) {
+            // Extrahiere das Datum
+            const datumString = key.replace('krank_', '');
+            const urlaubKey = `urlaub_tage_${datumString}`;
+            
+            // Wenn kein zugehöriger urlaub_tage_* Eintrag existiert oder dieser "0" ist, markiere zum Löschen
+            const urlaubWert = localStorage.getItem(urlaubKey);
+            if (!urlaubWert || urlaubWert === "0") {
+                zuLoeschende.push(key);
+            }
+        }
+    }
+    
+    // Setze alle verwaisten Einträge auf "false" (statt löschen)
+    zuLoeschende.forEach(key => {
+        localStorage.setItem(key, "false");
+    });
 }
 
 // Urlaubstage in LocalStorage speichern (DEPRECATED - wird nicht mehr verwendet)
@@ -121,14 +664,12 @@ function formatiereDatumLokal(datum) {
 }
 
 // Speichere oder aktualisiere Urlaubstage für ein bestimmtes Datum
-function aktualisiereUrlaubstageProTag(datum, urlaubstage) {
-    const datumString = formatiereDatumLokal(datum);
-    const key = `urlaub_tage_${datumString}`;
-    
+function aktualisiereUrlaubstageProTag(datum, urlaubstage, istKrank = false) {
     if (urlaubstage > 0) {
-        localStorage.setItem(key, urlaubstage.toString());
+        setzeUrlaubstag(datum, urlaubstage);
+        setzeKrankstatus(datum, istKrank);
     } else {
-        localStorage.removeItem(key);
+        loescheUrlaubUndKrank(datum);
     }
     
     // Aktualisiere Urlaubskalender-Anzeige
@@ -140,29 +681,30 @@ function aktualisiereUrlaubstageProTag(datum, urlaubstage) {
     }
 }
 
-// Lade Urlaubstage für ein bestimmtes Datum
-function ladeUrlaubstageProTag(datum) {
-    const datumString = formatiereDatumLokal(datum);
-    const key = `urlaub_tage_${datumString}`;
-    const gespeichert = localStorage.getItem(key);
-    
-    return gespeichert ? parseFloat(gespeichert) : 0;
+// Prüfe ob ein Datum ein Kranktag ist
+function istKranktag(datum) {
+    return holeKrankstatus(datum);
 }
 
 // Aktualisiere Urlaubskalender-Badge mit Gesamtsumme
 function aktualisiereUrlaubskalenderBadge() {
     let gesamtTage = 0;
     
-    // Summiere alle gespeicherten Urlaubstage
-    for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith('urlaub_tage_')) {
+    // Summiere alle gespeicherten Urlaubstage (ohne Kranktage) aus dem Index
+    const index = holeUrlaubstageIndex();
+    index.forEach(datumString => {
+        const [jahr, monat, tag] = datumString.split('-').map(Number);
+        const datum = new Date(jahr, monat - 1, tag);
+        
+        // Überspringe Kranktage
+        if (!istKranktag(datum)) {
+            const key = `urlaub_tage_${datumString}`;
             const tage = parseFloat(localStorage.getItem(key));
             if (!isNaN(tage)) {
                 gesamtTage += tage;
             }
         }
-    }
+    });
     
     // Lade Urlaubstage pro Jahr aus Stammdaten
     const stammdaten = JSON.parse(localStorage.getItem('stammdaten') || '{}');
@@ -191,12 +733,16 @@ function aktualisiereUrlaubskalenderBadge() {
 // Prüfe ob ein Datum ein Urlaubstag ist
 function istUrlaubstag(datum) {
     // Prüfe direkt in LocalStorage ob Urlaubstage für dieses Datum gespeichert sind
-    const urlaubstage = ladeUrlaubstageProTag(datum);
-    return urlaubstage > 0;
+    return holeUrlaubstag(datum) > 0;
 }
 
 // Berechne Anzahl Urlaubstage (ohne Wochenenden und Feiertage)
 function berechneUrlaubstage(vonDate, bisDate) {
+    // Validierung: vonDate darf nicht nach bisDate liegen
+    if (vonDate > bisDate) {
+        throw new Error('Ungültiger Datumsbereich');
+    }
+    
     let tage = 0;
     const current = new Date(vonDate);
     
@@ -250,13 +796,23 @@ function aktualisiereUrlaubsliste() {
     }
     
     if (urlaubstageMap.size === 0 && urlaubstage.length === 0) {
-        const leerHTML = `
-            <div class="text-muted text-center py-3">
-                <i class="bi bi-calendar-x" style="font-size: 2rem;"></i>
-                <p class="mb-0 mt-2">Noch keine Urlaubstage geplant</p>
-            </div>
-        `;
-        desktopListe.innerHTML = leerHTML;
+        // Leere Nachricht sicher erstellen (XSS-sicher)
+        desktopListe.innerHTML = '';
+        
+        const leerDiv = document.createElement('div');
+        leerDiv.className = 'text-muted text-center py-3';
+        
+        const icon = document.createElement('i');
+        icon.className = 'bi bi-calendar-x';
+        icon.style.fontSize = '2rem';
+        
+        const text = document.createElement('p');
+        text.className = 'mb-0 mt-2';
+        text.textContent = 'Noch keine Urlaubstage geplant';
+        
+        leerDiv.appendChild(icon);
+        leerDiv.appendChild(text);
+        desktopListe.appendChild(leerDiv);
         return;
     }
     
@@ -267,19 +823,25 @@ function aktualisiereUrlaubsliste() {
     const sortierteDaten = Array.from(urlaubstageMap.keys()).sort();
     
     // Gruppiere aufeinanderfolgende ARBEITSTAGE (überspringt Wochenenden/Feiertage)
+    // WICHTIG: Nur Tage mit gleichem Typ (Urlaub/Krank) werden gruppiert!
     let aktuelleGruppe = null;
     sortierteDaten.forEach(datumString => {
         const tage = urlaubstageMap.get(datumString);
         const datum = new Date(datumString + 'T12:00:00'); // Mittag um Zeitzone zu vermeiden
+        const istKrank = istKranktag(datum);
         
         if (!aktuelleGruppe) {
             // Neue Gruppe starten
             aktuelleGruppe = {
                 von: datumString,
                 bis: datumString,
-                tage: tage
+                tage: tage,
+                istKrank: istKrank
             };
         } else {
+            // Prüfe ob der Typ gleich ist (Urlaub vs. Krank)
+            const gleicherTyp = aktuelleGruppe.istKrank === istKrank;
+            
             // Prüfe ob aufeinanderfolgend (unter Berücksichtigung von Wochenenden/Feiertagen)
             const letztesDatum = new Date(aktuelleGruppe.bis + 'T12:00:00');
             const diffTage = Math.round((datum - letztesDatum) / (1000 * 60 * 60 * 24));
@@ -303,17 +865,19 @@ function aktualisiereUrlaubsliste() {
                 }
             }
             
-            if (diffTage === 1 || (diffTage > 1 && nurWochenendenDazwischen)) {
-                // Erweitere Gruppe (direkt aufeinanderfolgend oder nur Wochenenden/Feiertage dazwischen)
+            // Erweitere Gruppe nur wenn: gleicher Typ UND (direkt aufeinanderfolgend ODER nur Wochenenden/Feiertage dazwischen)
+            if (gleicherTyp && (diffTage === 1 || (diffTage > 1 && nurWochenendenDazwischen))) {
+                // Erweitere Gruppe
                 aktuelleGruppe.bis = datumString;
                 aktuelleGruppe.tage += tage;
             } else {
-                // Speichere alte Gruppe und starte neue (echte Lücke in Urlaubstagen)
+                // Speichere alte Gruppe und starte neue (unterschiedlicher Typ oder echte Lücke)
                 urlaubseintraege.push(aktuelleGruppe);
                 aktuelleGruppe = {
                     von: datumString,
                     bis: datumString,
-                    tage: tage
+                    tage: tage,
+                    istKrank: istKrank
                 };
             }
         }
@@ -324,8 +888,10 @@ function aktualisiereUrlaubsliste() {
         urlaubseintraege.push(aktuelleGruppe);
     }
     
-    // Erstelle HTML für Liste
-    let html = '';
+    // Leere die Liste (sicher)
+    desktopListe.textContent = '';
+    
+    // Erstelle DOM-Elemente für jeden Eintrag (XSS-sicher)
     urlaubseintraege.forEach((eintrag, index) => {
         const vonDate = new Date(eintrag.von + 'T12:00:00');
         const bisDate = new Date(eintrag.bis + 'T12:00:00');
@@ -333,51 +899,114 @@ function aktualisiereUrlaubsliste() {
         const vonFormatiert = vonDate.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
         const bisFormatiert = bisDate.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
         
+        // Verwende den gespeicherten Typ aus der Gruppe
+        const istKrank = eintrag.istKrank;
+        const typ = istKrank ? 'Krank' : 'Urlaub';
+        const iconClass = istKrank ? 'bi-heart-pulse text-danger' : 'bi-calendar-event text-success';
+        const badgeClass = istKrank ? 'bg-danger' : 'bg-success';
+        
         // Zeige tatsächliche Urlaubstage mit besserer Formatierung
-
         let tageAnzeige;
         if (eintrag.tage === 1) {
-            tageAnzeige = '1 Tag';
+            tageAnzeige = `1 Tag (${typ})`;
         } else if (eintrag.tage === 0.5) {
-            tageAnzeige = '0.5 Tage (halber Tag)';
+            tageAnzeige = `0.5 Tage (halber Tag, ${typ})`;
         } else if (eintrag.tage % 1 === 0) {
-            tageAnzeige = `${eintrag.tage} Tage`;
+            tageAnzeige = `${eintrag.tage} Tage (${typ})`;
         } else {
             // Zeige Dezimalzahl für halbe Tage
-            tageAnzeige = `${eintrag.tage} Tage`;
+            tageAnzeige = `${eintrag.tage} Tage (${typ})`;
         }
         
-        html += `
-            <div class="list-group-item d-flex justify-content-between align-items-center">
-                <div>
-                    <i class="bi bi-calendar-event text-success"></i>
-                    <strong>${vonFormatiert}</strong> bis <strong>${bisFormatiert}</strong>
-                    <span class="badge bg-success ms-2">${tageAnzeige}</span>
-                </div>
-                <button class="btn btn-sm btn-outline-danger" onclick="loescheUrlaubseintraege('${eintrag.von}', '${eintrag.bis}')">
-                    <i class="bi bi-trash"></i>
-                </button>
-            </div>
-        `;
+        // Erstelle Haupt-Container
+        const listItem = document.createElement('div');
+        listItem.className = 'list-group-item';
+        
+        // Erstelle Flex-Container
+        const flexContainer = document.createElement('div');
+        flexContainer.className = 'd-flex align-items-center';
+        
+        // Icon-Container
+        const iconContainer = document.createElement('div');
+        iconContainer.style.cssText = 'flex-shrink: 0; margin-right: 8px;';
+        const icon = document.createElement('i');
+        icon.className = `bi ${iconClass}`;
+        iconContainer.appendChild(icon);
+        
+        // Datums-Container
+        const dateContainer = document.createElement('div');
+        dateContainer.style.cssText = 'flex: 1; min-width: 0; margin-right: 12px;';
+        const vonStrong = document.createElement('strong');
+        vonStrong.textContent = vonFormatiert;
+        dateContainer.appendChild(vonStrong);
+        dateContainer.appendChild(document.createTextNode(' bis '));
+        const bisStrong = document.createElement('strong');
+        bisStrong.textContent = bisFormatiert;
+        dateContainer.appendChild(bisStrong);
+        
+        // Badge-Container
+        const badgeContainer = document.createElement('div');
+        badgeContainer.style.cssText = 'flex-shrink: 0; margin-right: 8px;';
+        const badge = document.createElement('span');
+        badge.className = `badge ${badgeClass}`;
+        badge.textContent = tageAnzeige;
+        badgeContainer.appendChild(badge);
+        
+        // Button-Container
+        const buttonContainer = document.createElement('div');
+        buttonContainer.style.cssText = 'flex-shrink: 0;';
+        const deleteButton = document.createElement('button');
+        deleteButton.className = 'btn btn-sm btn-outline-danger';
+        deleteButton.type = 'button';
+        // Sichere Event-Listener statt onclick-Attribut
+        deleteButton.addEventListener('click', () => {
+            loescheUrlaubseintraege(eintrag.von, eintrag.bis);
+        });
+        const trashIcon = document.createElement('i');
+        trashIcon.className = 'bi bi-trash';
+        deleteButton.appendChild(trashIcon);
+        buttonContainer.appendChild(deleteButton);
+        
+        // Füge alle Container zum Flex-Container hinzu
+        flexContainer.appendChild(iconContainer);
+        flexContainer.appendChild(dateContainer);
+        flexContainer.appendChild(badgeContainer);
+        flexContainer.appendChild(buttonContainer);
+        
+        // Füge Flex-Container zum List-Item hinzu
+        listItem.appendChild(flexContainer);
+        
+        // Füge List-Item zur Desktop-Liste hinzu
+        desktopListe.appendChild(listItem);
     });
-    
-    desktopListe.innerHTML = html;
 }
 
 // Urlaubsperiode hinzufügen
 function fuegeUrlaubHinzu(von, bis, isMobile = false) {
-    if (!von || !bis) {
-        zeigeToast('Bitte beide Daten auswählen', 'warning');
+    if (!von) {
+        zeigeToast('Bitte mindestens das "Von"-Datum auswählen', 'warning');
         return;
     }
     
     const vonDate = new Date(von + 'T12:00:00'); // Mittag um Zeitzone zu vermeiden
-    const bisDate = new Date(bis + 'T12:00:00');
+    // Wenn kein "Bis"-Datum angegeben, verwende "Von"-Datum (einzelner Tag)
+    const bisDate = bis ? new Date(bis + 'T12:00:00') : new Date(von + 'T12:00:00');
     
     if (vonDate > bisDate) {
         zeigeToast('Start-Datum muss vor End-Datum liegen', 'warning');
         return;
     }
+    
+    // Prüfe ob "Krank" Checkbox aktiviert ist
+    const istKrankCheckbox = document.getElementById('istKrank');
+    const istKrank = istKrankCheckbox ? istKrankCheckbox.checked : false;
+    
+    // Prüfe ob "Halber Tag" Checkbox aktiviert ist (für Urlaub UND Krank)
+    const halberTagCheckbox = document.getElementById('halberTag');
+    const istHalberTag = halberTagCheckbox ? halberTagCheckbox.checked : false;
+    // Halber Tag wird für Urlaub UND Kranktage ausgewertet
+    const urlaubstagWert = istHalberTag ? 0.5 : 1.0;
+    
     
     // Erstelle urlaub_tage_* Einträge für jeden Arbeitstag in der Periode
     const current = new Date(vonDate);
@@ -390,22 +1019,55 @@ function fuegeUrlaubHinzu(von, bis, isMobile = false) {
         
         // Nur Werktage (Mo-Fr) die keine Feiertage sind
         if (!istWochenende && !istFeiertag) {
-            aktualisiereUrlaubstageProTag(current, 1.0);
-            urlaubstageGesamt++;
+            aktualisiereUrlaubstageProTag(current, urlaubstagWert, istKrank);
+            urlaubstageGesamt += urlaubstagWert;
         }
         
         current.setDate(current.getDate() + 1);
     }
     
     // Eingabefelder leeren
-    document.getElementById('urlaubVon').value = '';
-    document.getElementById('urlaubBis').value = '';
+    if (isMobile) {
+        const vonMobile = document.getElementById('urlaubVonMobile');
+        const bisMobile = document.getElementById('urlaubBisMobile');
+        if (vonMobile) vonMobile.value = '';
+        if (bisMobile) bisMobile.value = '';
+    } else {
+        const vonDesktop = document.getElementById('urlaubVon');
+        const bisDesktop = document.getElementById('urlaubBis');
+        if (vonDesktop) vonDesktop.value = '';
+        if (bisDesktop) bisDesktop.value = '';
+        // Checkboxen zurücksetzen
+        if (halberTagCheckbox) halberTagCheckbox.checked = false;
+        if (istKrankCheckbox) istKrankCheckbox.checked = false;
+    }
     
     // Aktualisiere Listen
     aktualisiereUrlaubsliste();
     aktualisiereUrlaubskalenderBadge();
     
-    zeigeToast(`Urlaub hinzugefügt: ${urlaubstageGesamt} Tag(e)`, 'success');
+    // Monat neu laden, damit die Kranktage/Urlaubstage korrekt angezeigt werden
+    ladeMonat(aktuellesJahr, aktuellerMonat);
+    
+    // Nachricht anpassen für halbe Tage und Kranktage
+    let nachricht;
+    const typSingular = istKrank ? 'Kranktag' : 'Urlaubstag';
+    const typPlural = istKrank ? 'Kranktage' : 'Urlaubstage';
+    
+    if (urlaubstageGesamt === 0) {
+        nachricht = 'Keine Arbeitstage in der ausgewählten Periode';
+    } else if (urlaubstageGesamt === 1) {
+        nachricht = `${typSingular} hinzugefügt: 1 Tag`;
+    } else if (urlaubstageGesamt === 0.5) {
+        nachricht = `${typSingular} hinzugefügt: 0.5 Tage (halber Tag)`;
+    } else if (urlaubstageGesamt % 1 === 0) {
+        // Ganze Zahl
+        nachricht = `${typPlural} hinzugefügt: ${urlaubstageGesamt} Tage`;
+    } else {
+        // Dezimalzahl (z.B. 2.5 Tage)
+        nachricht = `${typPlural} hinzugefügt: ${urlaubstageGesamt} Tage`;
+    }
+    zeigeToast(nachricht, 'success');
     
     // Aktualisiere Monatsansicht wenn im aktuellen Monat
     const aktuellerMonatStart = new Date(aktuellesJahr, aktuellerMonat, 1);
@@ -416,56 +1078,230 @@ function fuegeUrlaubHinzu(von, bis, isMobile = false) {
     }
 }
 
-// Füge einen einzelnen Urlaubstag automatisch hinzu (wenn manuell "Urlaub" eingetragen wird)
-function fuegeUrlaubstagAutomatischHinzu(tag) {
-    // Erstelle Datum für diesen Tag (ohne Zeitzone-Probleme)
-    const datum = new Date(aktuellesJahr, aktuellerMonat, tag);
+/**
+ * Erstellt eine Radio-Button-Gruppe sicher mit DOM-API
+ * @param {string} name - Name der Radio-Button-Gruppe
+ * @param {Array} buttons - Array von Button-Konfigurationen
+ * @returns {HTMLElement} - Die erstellte Button-Gruppe
+ */
+function createRadioButtonGroup(name, buttons) {
+    const group = document.createElement('div');
+    group.className = 'btn-group w-100';
+    group.setAttribute('role', 'group');
     
-    // Prüfe ob bereits Urlaubstage für diesen Tag gespeichert sind
-    const vorhandeneUrlaubstage = ladeUrlaubstageProTag(datum);
-    
-    // Nur überschreiben wenn noch keine Urlaubstage gespeichert sind
-    // oder wenn es 0 ist (gelöscht wurde)
-    if (vorhandeneUrlaubstage === null || vorhandeneUrlaubstage === 0) {
-        // Speichere 1 ganzen Urlaubstag für diesen Tag
-        aktualisiereUrlaubstageProTag(datum, 1.0);
+    buttons.forEach(btn => {
+        const input = document.createElement('input');
+        input.type = 'radio';
+        input.className = 'btn-check';
+        input.name = name;
+        input.id = btn.id;
+        input.value = btn.value;
+        if (btn.checked) input.checked = true;
         
-        // Aktualisiere Listen
-        aktualisiereUrlaubsliste();
-        aktualisiereUrlaubskalenderBadge();
-        zeigeToast('Urlaubstag automatisch hinzugefügt', 'success');
-    } else {
-        // Bereits Urlaubstage vorhanden - nicht überschreiben
-        zeigeToast(`Urlaubstag bereits vorhanden (${vorhandeneUrlaubstage} Tage)`, 'info');
+        const label = document.createElement('label');
+        label.className = `btn btn-outline-${btn.color} btn-sm`;
+        label.setAttribute('for', btn.id);
+        
+        if (btn.icon) {
+            const icon = document.createElement('i');
+            icon.className = `bi ${btn.icon}`;
+            label.appendChild(icon);
+            label.appendChild(document.createTextNode(' '));
+        }
+        label.appendChild(document.createTextNode(btn.label));
+        
+        group.appendChild(input);
+        group.appendChild(label);
+    });
+    
+    return group;
+}
+
+// Zeige Tage-Konfiguration an
+function zeigeTageKonfiguration() {
+    const von = document.getElementById('urlaubVon').value;
+    const bis = document.getElementById('urlaubBis').value || von; // Wenn kein "Bis", verwende "Von"
+    
+    if (!von) {
+        zeigeToast('Bitte mindestens das "Von"-Datum auswählen', 'warning');
+        return;
     }
     
-    // Aktualisiere die Zeile/Card visuell (immer, auch wenn bereits vorhanden)
+    const vonDate = new Date(von + 'T12:00:00');
+    const bisDate = new Date(bis + 'T12:00:00');
+    
+    if (vonDate > bisDate) {
+        zeigeToast('Start-Datum muss vor End-Datum liegen', 'warning');
+        return;
+    }
+    
+    // Sammle alle Arbeitstage in der Periode
+    const arbeitstage = [];
+    const current = new Date(vonDate);
+    
+    while (current <= bisDate) {
+        const wochentag = current.getDay();
+        const istWochenende = (wochentag === 0 || wochentag === 6);
+        const istFeiertag = istDatumFeiertag(current);
+        
+        // Nur Werktage (Mo-Fr) die keine Feiertage sind
+        if (!istWochenende && !istFeiertag) {
+            arbeitstage.push(new Date(current));
+        }
+        
+        current.setDate(current.getDate() + 1);
+    }
+    
+    if (arbeitstage.length === 0) {
+        zeigeToast('Keine Arbeitstage in der ausgewählten Periode', 'warning');
+        return;
+    }
+    
+    // Erstelle die Tage-Liste
+    const container = document.getElementById('tageKonfigurationListe');
+    container.innerHTML = '';
+    
+    const wochentage = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+    
+    arbeitstage.forEach((datum, index) => {
+        const datumString = formatiereDatumLokal(datum);
+        const wochentag = wochentage[datum.getDay()];
+        const tagNummer = datum.getDate();
+        const monat = datum.toLocaleDateString('de-DE', { month: 'long' });
+        
+        // Erstelle Hauptcontainer mit DOM-API (XSS-sicher)
+        const tagDiv = document.createElement('div');
+        tagDiv.className = 'card mb-2';
+        tagDiv.dataset.datum = datumString;
+        
+        const cardBody = document.createElement('div');
+        cardBody.className = 'card-body py-2';
+        
+        const row = document.createElement('div');
+        row.className = 'row align-items-center';
+        
+        // Spalte 1: Datum-Anzeige (textContent ist XSS-sicher)
+        const col1 = document.createElement('div');
+        col1.className = 'col-md-4';
+        const strong = document.createElement('strong');
+        strong.textContent = `${wochentag}, ${tagNummer}. ${monat}`;
+        col1.appendChild(strong);
+        
+        // Spalte 2: Typ-Auswahl (Urlaub/Krank)
+        const col2 = document.createElement('div');
+        col2.className = 'col-md-4';
+        const btnGroup1 = createRadioButtonGroup(
+            `typ_${index}`,
+            [
+                { id: `urlaub_${index}`, value: 'urlaub', label: 'Urlaub', icon: 'bi-calendar-check', color: 'success', checked: true },
+                { id: `krank_${index}`, value: 'krank', label: 'Krank', icon: 'bi-thermometer-half', color: 'danger' }
+            ]
+        );
+        col2.appendChild(btnGroup1);
+        
+        // Spalte 3: Dauer-Auswahl (Ganz/Halb)
+        const col3 = document.createElement('div');
+        col3.className = 'col-md-4';
+        const btnGroup2 = createRadioButtonGroup(
+            `dauer_${index}`,
+            [
+                { id: `ganz_${index}`, value: '1.0', label: 'Ganzer Tag', color: 'primary', checked: true },
+                { id: `halb_${index}`, value: '0.5', label: 'Halber Tag', color: 'primary' }
+            ]
+        );
+        col3.appendChild(btnGroup2);
+        
+        // Zusammenbauen der DOM-Struktur
+        row.appendChild(col1);
+        row.appendChild(col2);
+        row.appendChild(col3);
+        cardBody.appendChild(row);
+        tagDiv.appendChild(cardBody);
+        container.appendChild(tagDiv);
+    });
+    
+    // Zeige Konfiguration, verstecke Datumseingabe
+    document.getElementById('tageKonfigurationContainer').style.display = 'block';
+    document.querySelector('.row.mb-3').style.display = 'none';
+}
+
+// Verstecke Tage-Konfiguration
+function versteckeTageKonfiguration() {
+    document.getElementById('tageKonfigurationContainer').style.display = 'none';
+    document.querySelector('.row.mb-3').style.display = 'flex';
+    document.getElementById('tageKonfigurationListe').innerHTML = '';
+}
+
+// Füge konfigurierte Tage hinzu
+function fuegeKonfigurierteTageHinzu() {
+    const container = document.getElementById('tageKonfigurationListe');
+    const tagDivs = container.querySelectorAll('.card');
+    
+    if (tagDivs.length === 0) {
+        zeigeToast('Keine Tage konfiguriert', 'warning');
+        return;
+    }
+    
+    let urlaubstageGesamt = 0;
+    let kranktageGesamt = 0;
+    
+    // Verarbeite jeden Tag
+    tagDivs.forEach((tagDiv, index) => {
+        const datumString = tagDiv.dataset.datum;
+        const datum = new Date(datumString + 'T12:00:00');
+        
+        // Hole Typ (Urlaub/Krank)
+        const typUrlaub = document.getElementById(`urlaub_${index}`);
+        const istKrank = !typUrlaub.checked;
+        
+        // Hole Dauer (Ganz/Halb)
+        const dauerGanz = document.getElementById(`ganz_${index}`);
+        const urlaubstagWert = dauerGanz.checked ? 1.0 : 0.5;
+        
+        // Speichere den Tag
+        aktualisiereUrlaubstageProTag(datum, urlaubstagWert, istKrank);
+        
+        if (istKrank) {
+            kranktageGesamt += urlaubstagWert;
+        } else {
+            urlaubstageGesamt += urlaubstagWert;
+        }
+    });
+    
+    // Eingabefelder leeren
+    document.getElementById('urlaubVon').value = '';
+    document.getElementById('urlaubBis').value = '';
+    
+    // Verstecke Konfiguration
+    versteckeTageKonfiguration();
+    
+    // Aktualisiere Listen
+    aktualisiereUrlaubsliste();
+    aktualisiereUrlaubskalenderBadge();
+    
+    // Monat neu laden
+    ladeMonat(aktuellesJahr, aktuellerMonat);
+    
+    // Nachricht erstellen
+    let nachricht = '';
+    if (urlaubstageGesamt > 0 && kranktageGesamt > 0) {
+        nachricht = `${urlaubstageGesamt} Urlaubstag(e) und ${kranktageGesamt} Kranktag(e) hinzugefügt`;
+    } else if (urlaubstageGesamt > 0) {
+        nachricht = `${urlaubstageGesamt} Urlaubstag(e) hinzugefügt`;
+    } else if (kranktageGesamt > 0) {
+        nachricht = `${kranktageGesamt} Kranktag(e) hinzugefügt`;
+    }
+    
+    zeigeToast(nachricht, 'success');
+}
+
+// Füge einen einzelnen Urlaubstag automatisch hinzu (wenn manuell "Urlaub" eingetragen wird)
+function fuegeUrlaubstagAutomatischHinzu(tag) {
+    // Aktualisiere nur die visuelle Markierung
     // Desktop: Zeile
     const tr = document.querySelector(`#zeiterfassungBody tr[data-tag="${tag}"]`);
     if (tr) {
         tr.classList.add('urlaub-row');
-        
-        // Lösche ausgefüllte Arbeitszeit-Felder (Bis1, Von2, Bis2, Vor/Nach)
-        const bis1Input = tr.querySelector('[data-field="bis1"]');
-        const von2Input = tr.querySelector('[data-field="von2"]');
-        const bis2Input = tr.querySelector('[data-field="bis2"]');
-        const vornachInput = tr.querySelector('[data-field="vornach"]');
-        
-        if (bis1Input) bis1Input.value = '';
-        if (von2Input) von2Input.value = '';
-        if (bis2Input) bis2Input.value = '';
-        if (vornachInput) vornachInput.value = '';
-        
-        // Setze Urlaubsstunden im Stunden-Feld
-        const stundenInput = tr.querySelector('[data-field="stunden"]');
-        if (stundenInput && wochenstunden > 0) {
-            const tagesStunden = berechneTaeglicheUrlaubsstunden();
-            const stunden = Math.floor(tagesStunden);
-            const minuten = Math.round((tagesStunden - stunden) * 60);
-            stundenInput.value = `${stunden}:${minuten.toString().padStart(2, '0')}`;
-        } else if (stundenInput) {
-            stundenInput.value = '0:00';
-        }
     }
     
     // Mobile: Card
@@ -476,35 +1312,40 @@ function fuegeUrlaubstagAutomatischHinzu(tag) {
         if (header) {
             header.classList.add('urlaub-header');
         }
-        
-        // Lösche ausgefüllte Arbeitszeit-Felder (Bis1, Von2, Bis2, Vor/Nach)
-        const bis1Input = card.querySelector('[data-field="bis1"]');
-        const von2Input = card.querySelector('[data-field="von2"]');
-        const bis2Input = card.querySelector('[data-field="bis2"]');
-        const vornachInput = card.querySelector('[data-field="vornach"]');
-        
-        if (bis1Input) bis1Input.value = '';
-        if (von2Input) von2Input.value = '';
-        if (bis2Input) bis2Input.value = '';
-        if (vornachInput) vornachInput.value = '';
-        
-        // Setze Urlaubsstunden im Stunden-Feld
-        const stundenInput = card.querySelector('[data-field="stunden"]');
-        if (stundenInput && wochenstunden > 0) {
-            const tagesStunden = berechneTaeglicheUrlaubsstunden();
-            const stunden = Math.floor(tagesStunden);
-            const minuten = Math.round((tagesStunden - stunden) * 60);
-            stundenInput.value = `${stunden}:${minuten.toString().padStart(2, '0')}`;
-        } else if (stundenInput) {
-            stundenInput.value = '0:00';
-        }
+    }
+}
+
+function entferneUrlaubstagAutomatisch(tag) {
+    // Erstelle Datum für diesen Tag
+    const datum = erstelleDatumFuerTag(tag);
+    const datumString = formatiereDatumLokal(datum);
+    
+    // Prüfe ob es ein Kranktag war
+    const warKrank = istKranktag(datum);
+    const typ = warKrank ? 'Kranktag' : 'Urlaubstag';
+    
+    // Entferne Urlaubstag aus Kalender (setzt urlaub_tage_* und krank_* auf 0/false)
+    aktualisiereUrlaubstageProTag(datum, 0);
+    
+    // Lösche Urlaubstag und Krank-Status
+    loescheUrlaubUndKrank(datum);
+    
+    // Lösche den kompletten Tag aus zeiterfassungDaten
+    const monatsKey = getMonatsKey(aktuellesJahr, aktuellerMonat);
+    if (zeiterfassungDaten[monatsKey] && zeiterfassungDaten[monatsKey].tage && zeiterfassungDaten[monatsKey].tage[tag]) {
+        delete zeiterfassungDaten[monatsKey].tage[tag];
     }
     
-    // Speichere die Zeile mit "Urlaub" im Von1-Feld und den Urlaubsstunden
-    speichereZeile(tag);
+    // Speichere Änderungen
+    speichereDatenInLocalStorage();
     
-    // Berechne alle Zeilen neu für kumulierte Werte
-    berechneAlleZeilen();
+    aktualisiereUrlaubsliste();
+    aktualisiereUrlaubskalenderBadge();
+    
+    // Lade Monat neu, um die Anzeige unter dem Datum zu aktualisieren
+    ladeMonat(aktuellesJahr, aktuellerMonat);
+    
+    zeigeToast(`${typ} entfernt`, 'info');
 }
 
 // Lösche Urlaubseinträge für einen Datumsbereich
@@ -513,11 +1354,23 @@ function loescheUrlaubseintraege(von, bis) {
     const bisDate = new Date(bis + 'T12:00:00');
     const current = new Date(vonDate);
     
+    // Prüfe den Typ des ersten Tags (alle Tage in einer Periode haben den gleichen Typ)
+    const warKrank = istKranktag(vonDate);
+    let tageGeloescht = 0;
+    
     // Lösche alle Urlaubstage in diesem Bereich
     while (current <= bisDate) {
         const datumString = formatiereDatumLokal(current);
         const key = `urlaub_tage_${datumString}`;
-        localStorage.removeItem(key);
+        const krankKey = `krank_${datumString}`;
+        
+        // Zähle nur wenn der Tag tatsächlich existierte
+        if (localStorage.getItem(key)) {
+            tageGeloescht++;
+        }
+        
+        // Lösche Urlaubstag und Krank-Status
+        loescheUrlaubUndKrank(current);
         
         // Lösche auch gespeicherte Zeitdaten für diesen Tag
         const tag = current.getDate();
@@ -525,6 +1378,7 @@ function loescheUrlaubseintraege(von, bis) {
         const jahr = current.getFullYear();
         const monatsKey = getMonatsKey(jahr, monat);
         
+        // Lösche den kompletten Tag aus zeiterfassungDaten
         if (zeiterfassungDaten[monatsKey] && zeiterfassungDaten[monatsKey].tage && zeiterfassungDaten[monatsKey].tage[tag]) {
             delete zeiterfassungDaten[monatsKey].tage[tag];
         }
@@ -532,30 +1386,36 @@ function loescheUrlaubseintraege(von, bis) {
         current.setDate(current.getDate() + 1);
     }
     
-    // Speichere Änderungen
+    // Speichere Änderungen SOFORT in LocalStorage
     speichereDatenInLocalStorage();
+    
+    // WICHTIG: Lade Daten neu aus LocalStorage, um sicherzustellen dass zeiterfassungDaten synchron ist
+    ladeDatenAusLocalStorage();
     
     // Aktualisiere Anzeige
     aktualisiereUrlaubsliste();
     aktualisiereUrlaubskalenderBadge();
-    zeigeToast('Urlaubstage gelöscht', 'info');
     
-    // Aktualisiere Monatsansicht
+    // Erstelle passende Nachricht
+    const typ = warKrank ? 'Kranktag' : 'Urlaubstag';
+    const typPlural = warKrank ? 'Kranktage' : 'Urlaubstage';
+    const nachricht = tageGeloescht === 1 ? `${typ} gelöscht` : `${typPlural} gelöscht`;
+    zeigeToast(nachricht, 'info');
+    
+    // Aktualisiere Monatsansicht - dies lädt die Daten neu und zeigt die aktualisierten Werte
     ladeMonat(aktuellesJahr, aktuellerMonat);
 }
 
 
 // Event Listener für Urlaubskalender initialisieren
 function initUrlaubskalenderEvents() {
-    // Desktop
-    const btnUrlaubHinzufuegen = document.getElementById('btnUrlaubHinzufuegen');
-    if (btnUrlaubHinzufuegen) {
-        btnUrlaubHinzufuegen.addEventListener('click', function() {
-            const von = document.getElementById('urlaubVon').value;
-            const bis = document.getElementById('urlaubBis').value;
-            fuegeUrlaubHinzu(von, bis, false);
-        });
-    }
+    // Event-Listener für alte Tage-Konfiguration entfernt (vereinfachtes System)
+    // Die Funktionen zeigeTageKonfiguration, fuegeKonfigurierteTageHinzu und
+    // versteckeTageKonfiguration werden nicht mehr verwendet
+    
+    // Event-Listener für "Krank" und "Halber Tag" Checkboxen wurden entfernt
+    // Beide Optionen können jetzt unabhängig voneinander verwendet werden
+    // "Halber Tag" funktioniert für Urlaub UND Kranktage
 }
 // Event Listener für Optimierungs-Buttons
 function initUrlaubsOptimierungEvents() {
@@ -599,7 +1459,7 @@ async function optimiereUrlaub() {
 
 // Hilfsfunktion: Prüfe ob ein Datum ein Feiertag ist
 function istDatumFeiertag(datum, feiertage = null) {
-    const datumString = formatDatum(datum);
+    const datumString = formatiereDatumLokal(datum);
     
     // Wenn kein feiertage-Parameter übergeben wurde, verwende den Cache
     if (!feiertage) {
@@ -650,8 +1510,8 @@ function findeOptimaleUrlaubsperioden(jahr, feiertage) {
                     feiertagDatum: feiertag.datumString,
                     urlaubstage: 1,
                     freieTage: 4,
-                    von: formatDatum(freitagDavor),
-                    bis: formatDatum(freitagDavor),
+                    von: formatiereDatumLokal(freitagDavor),
+                    bis: formatiereDatumLokal(freitagDavor),
                     beschreibung: `1 Urlaubstag am Freitag → 4 Tage frei (Fr-Mo)`
                 };
             }
@@ -665,8 +1525,8 @@ function findeOptimaleUrlaubsperioden(jahr, feiertage) {
                     feiertagDatum: feiertag.datumString,
                     urlaubstage: 1,
                     freieTage: 4,
-                    von: formatDatum(montagDanach),
-                    bis: formatDatum(montagDanach),
+                    von: formatiereDatumLokal(montagDanach),
+                    bis: formatiereDatumLokal(montagDanach),
                     beschreibung: `1 Urlaubstag am Montag → 4 Tage frei (Fr-Mo)`
                 };
             }
@@ -682,8 +1542,8 @@ function findeOptimaleUrlaubsperioden(jahr, feiertage) {
                     feiertagDatum: feiertag.datumString,
                     urlaubstage: 1,
                     freieTage: 4,
-                    von: formatDatum(montagDavor),
-                    bis: formatDatum(montagDavor),
+                    von: formatiereDatumLokal(montagDavor),
+                    bis: formatiereDatumLokal(montagDavor),
                     beschreibung: `1 Urlaubstag am Montag → 4 Tage frei (Sa-Di)`
                 };
             }
@@ -699,8 +1559,8 @@ function findeOptimaleUrlaubsperioden(jahr, feiertage) {
                     feiertagDatum: feiertag.datumString,
                     urlaubstage: 1,
                     freieTage: 4,
-                    von: formatDatum(freitagDanach),
-                    bis: formatDatum(freitagDanach),
+                    von: formatiereDatumLokal(freitagDanach),
+                    bis: formatiereDatumLokal(freitagDanach),
                     beschreibung: `1 Urlaubstag am Freitag → 4 Tage frei (Do-So)`
                 };
             }
@@ -717,8 +1577,8 @@ function findeOptimaleUrlaubsperioden(jahr, feiertage) {
                     feiertagDatum: feiertag.datumString,
                     urlaubstage: 2,
                     freieTage: 5,
-                    von: formatDatum(dienstagDavor),
-                    bis: formatDatum(donnerstagDanach),
+                    von: formatiereDatumLokal(dienstagDavor),
+                    bis: formatiereDatumLokal(donnerstagDanach),
                     beschreibung: `2 Urlaubstage (Di+Do) → 5 Tage frei (Sa-Mi)`
                 };
             }
@@ -748,8 +1608,8 @@ function findeOptimaleUrlaubsperioden(jahr, feiertage) {
                     feiertagDatum: feiertag1.datumString,
                     urlaubstage: urlaubstage,
                     freieTage: freieTage,
-                    von: formatDatum(feiertag1.datum),
-                    bis: formatDatum(feiertag2.datum),
+                    von: formatiereDatumLokal(feiertag1.datum),
+                    bis: formatiereDatumLokal(feiertag2.datum),
                     beschreibung: `${urlaubstage} Urlaubstage → ${freieTage} Tage frei`
                 });
             }
@@ -794,76 +1654,152 @@ function berechneFreieTage(von, bis) {
 
 // Hilfsfunktion: Tage zu Datum addieren
 function addDays(date, days) {
+    // Validierung: Prüfe auf gültiges Datum und Anzahl Tage
+    if (!(date instanceof Date) || isNaN(date.getTime())) {
+        throw new Error('Ungültiges Datum');
+    }
+    if (typeof days !== 'number' || isNaN(days)) {
+        throw new Error('Ungültige Anzahl Tage');
+    }
+    
     const result = new Date(date);
     result.setDate(result.getDate() + days);
     return result;
 }
 
-// Hilfsfunktion: Datum formatieren
-function formatDatum(date) {
-    const jahr = date.getFullYear();
-    const monat = String(date.getMonth() + 1).padStart(2, '0');
-    const tag = String(date.getDate()).padStart(2, '0');
-    return `${jahr}-${monat}-${tag}`;
+/**
+ * Erstellt ein DOM-Element für eine Urlaubsperiode (XSS-sicher)
+ * @param {Object} periode - Die Periodendaten
+ * @param {number} index - Der Index der Periode
+ * @returns {HTMLElement} Das erstellte DOM-Element
+ */
+function erstellePeriodeElement(periode, index) {
+    const effizienz = (periode.freieTage / periode.urlaubstage).toFixed(1);
+    
+    // Hauptcontainer
+    const item = document.createElement('div');
+    item.className = 'list-group-item';
+    
+    // Header-Bereich mit Titel und Effizienz
+    const header = document.createElement('div');
+    header.className = 'd-flex justify-content-between align-items-start mb-2';
+    
+    // Linke Seite: Titel, Feiertag, Beschreibung
+    const leftDiv = document.createElement('div');
+    
+    const h6 = document.createElement('h6');
+    h6.className = 'mb-1';
+    
+    const indexBadge = document.createElement('span');
+    indexBadge.className = 'badge bg-info';
+    indexBadge.textContent = `#${index + 1}`;
+    h6.appendChild(indexBadge);
+    h6.appendChild(document.createTextNode(' ' + periode.typ));
+    
+    const feiertagP = document.createElement('p');
+    feiertagP.className = 'mb-1';
+    const feiertagStrong = document.createElement('strong');
+    feiertagStrong.textContent = periode.feiertag;
+    feiertagP.appendChild(feiertagStrong);
+    
+    const beschreibungP = document.createElement('p');
+    beschreibungP.className = 'mb-1 text-muted small';
+    beschreibungP.textContent = periode.beschreibung;
+    
+    leftDiv.appendChild(h6);
+    leftDiv.appendChild(feiertagP);
+    leftDiv.appendChild(beschreibungP);
+    
+    // Rechte Seite: Effizienz-Badge
+    const rightDiv = document.createElement('div');
+    rightDiv.className = 'text-end';
+    const effBadge = document.createElement('span');
+    effBadge.className = 'badge bg-success';
+    effBadge.style.fontSize = '1rem';
+    effBadge.textContent = `${effizienz}x Effizienz`;
+    rightDiv.appendChild(effBadge);
+    
+    header.appendChild(leftDiv);
+    header.appendChild(rightDiv);
+    
+    // Footer-Bereich mit Badges und Button
+    const footer = document.createElement('div');
+    footer.className = 'd-flex justify-content-between align-items-center';
+    
+    // Badges für Urlaubstage und freie Tage
+    const badgesDiv = document.createElement('div');
+    
+    const urlaubBadge = document.createElement('span');
+    urlaubBadge.className = 'badge bg-primary';
+    urlaubBadge.textContent = `${periode.urlaubstage} Urlaubstag(e)`;
+    
+    const freieBadge = document.createElement('span');
+    freieBadge.className = 'badge bg-success';
+    freieBadge.textContent = `${periode.freieTage} freie Tage`;
+    
+    badgesDiv.appendChild(urlaubBadge);
+    badgesDiv.appendChild(document.createTextNode(' '));
+    badgesDiv.appendChild(freieBadge);
+    
+    // Übernehmen-Button mit sicherem Event-Listener
+    const button = document.createElement('button');
+    button.className = 'btn btn-sm btn-outline-success';
+    button.type = 'button';
+    
+    const icon = document.createElement('i');
+    icon.className = 'bi bi-plus-circle';
+    button.appendChild(icon);
+    button.appendChild(document.createTextNode(' Übernehmen'));
+    
+    // Sicherer Event-Listener statt onclick-Attribut
+    button.addEventListener('click', () => {
+        uebernehmePeriode(periode.von, periode.bis);
+    });
+    
+    footer.appendChild(badgesDiv);
+    footer.appendChild(button);
+    
+    // Zusammenbauen
+    item.appendChild(header);
+    item.appendChild(footer);
+    
+    return item;
 }
 
-// Zeige Optimierungsergebnisse im Modal
+// Zeige Optimierungsergebnisse im Modal (XSS-sicher refactored)
 function zeigeOptimierungsErgebnisse(jahr, perioden) {
     document.getElementById('optimierungJahr').textContent = jahr;
     const container = document.getElementById('optimierungErgebnisse');
     
+    // Container leeren
+    container.innerHTML = '';
+    
     if (perioden.length === 0) {
-        container.innerHTML = `
-            <div class="alert alert-warning">
-                <i class="bi bi-exclamation-triangle"></i>
-                Keine optimalen Urlaubsperioden gefunden.
-            </div>
-        `;
+        // Leere Nachricht erstellen
+        const alert = document.createElement('div');
+        alert.className = 'alert alert-warning';
+        
+        const icon = document.createElement('i');
+        icon.className = 'bi bi-exclamation-triangle';
+        alert.appendChild(icon);
+        alert.appendChild(document.createTextNode(' Keine optimalen Urlaubsperioden gefunden.'));
+        
+        container.appendChild(alert);
     } else {
-        let html = '<div class="list-group">';
+        // Liste erstellen
+        const listGroup = document.createElement('div');
+        listGroup.className = 'list-group';
         
         perioden.forEach((periode, index) => {
-            const effizienz = (periode.freieTage / periode.urlaubstage).toFixed(1);
-            const vonFormatiert = new Date(periode.von).toLocaleDateString('de-DE', { day: '2-digit', month: 'short' });
-            const bisFormatiert = new Date(periode.bis).toLocaleDateString('de-DE', { day: '2-digit', month: 'short' });
-            
-            html += `
-                <div class="list-group-item">
-                    <div class="d-flex justify-content-between align-items-start mb-2">
-                        <div>
-                            <h6 class="mb-1">
-                                <span class="badge bg-info">#${index + 1}</span>
-                                ${periode.typ}
-                            </h6>
-                            <p class="mb-1"><strong>${periode.feiertag}</strong></p>
-                            <p class="mb-1 text-muted small">${periode.beschreibung}</p>
-                        </div>
-                        <div class="text-end">
-                            <span class="badge bg-success" style="font-size: 1rem;">
-                                ${effizienz}x Effizienz
-                            </span>
-                        </div>
-                    </div>
-                    <div class="d-flex justify-content-between align-items-center">
-                        <div>
-                            <span class="badge bg-primary">${periode.urlaubstage} Urlaubstag(e)</span>
-                            <span class="badge bg-success">${periode.freieTage} freie Tage</span>
-                        </div>
-                        <button class="btn btn-sm btn-outline-success" onclick="uebernehmePeriode('${periode.von}', '${periode.bis}')">
-                            <i class="bi bi-plus-circle"></i> Übernehmen
-                        </button>
-                    </div>
-                </div>
-            `;
+            const item = erstellePeriodeElement(periode, index);
+            listGroup.appendChild(item);
         });
         
-        html += '</div>';
-        container.innerHTML = html;
+        container.appendChild(listGroup);
     }
     
     // Zeige Modal
-    const modal = new bootstrap.Modal(document.getElementById('urlaubOptimierungModal'));
-    modal.show();
+    zeigeModal('urlaubOptimierungModal');
 }
 
 // Übernehme Periode in Urlaubskalender
@@ -910,11 +1846,39 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Urlaubstage laden
     ladeUrlaubstage();
     
+    // Zeige alle urlaub_tage_* Einträge für Debugging
+    zeigeAlleUrlaubstageImLocalStorage();
+    
+    // Bereinige verwaiste krank_* Einträge
+    bereinigeVerwaisteKranktage();
+    
+    // Bereinige Dummy-Einträge aus vorherigem Monat
+    bereinigeDummyEintraege();
+    
     // Urlaubskalender-Badge initialisieren
     aktualisiereUrlaubskalenderBadge();
     
     // Event Listener initialisieren
     initEventListeners();
+    
+    // Resize-Listener für Ansichtswechsel (Desktop <-> Mobile)
+    let resizeTimer;
+    let letzteBreite = window.innerWidth;
+    window.addEventListener('resize', function() {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function() {
+            const neueBreite = window.innerWidth;
+            const warMobile = letzteBreite < MOBILE_BREAKPOINT;
+            const istJetztMobile = neueBreite < MOBILE_BREAKPOINT;
+            
+            // Nur wenn zwischen Desktop und Mobile gewechselt wurde
+            if (warMobile !== istJetztMobile) {
+                berechneAlleZeilen();
+            }
+            
+            letzteBreite = neueBreite;
+        }, 250); // 250ms Debounce
+    });
     
     // Urlaubskalender Events initialisieren
     initUrlaubskalenderEvents();
@@ -958,11 +1922,24 @@ function initEventListeners() {
         await pruefeUndLadeMonat();
     });
     
+    // Button "Monat neu laden"
+    document.getElementById('btnMonatNeuLaden').addEventListener('click', async function() {
+        await ladeMonat(aktuellesJahr, aktuellerMonat);
+        zeigeToast('Monat neu geladen', 'success');
+    });
+    
     // Stammdaten speichern bei Änderung
     document.getElementById('mitarbeiterName').addEventListener('change', speichereStammdaten);
     document.getElementById('beschaeftigungsgrad').addEventListener('change', function() {
         speichereStammdaten();
+        // Stunden pro Tag Anzeige aktualisieren
+        aktualisiereStundenProTagAnzeige();
         berechneSollStundenAutomatisch();
+    });
+    
+    // Live-Update der Stunden pro Tag Anzeige bei Eingabe im Beschäftigungsgrad-Feld
+    document.getElementById('beschaeftigungsgrad').addEventListener('input', function() {
+        aktualisiereStundenProTagAnzeige();
     });
     document.getElementById('urlaubstageProJahr').addEventListener('change', function() {
         speichereStammdaten();
@@ -971,17 +1948,12 @@ function initEventListeners() {
     
     // Urlaubskalender Buttons
     document.getElementById('btnUrlaubskalender')?.addEventListener('click', function() {
-        const modal = new bootstrap.Modal(document.getElementById('urlaubskalenderModal'));
-        modal.show();
+        zeigeModal('urlaubskalenderModal');
     });
     
     document.getElementById('btnMobileUrlaubskalender')?.addEventListener('click', function() {
-        const modal = new bootstrap.Modal(document.getElementById('urlaubskalenderModal'));
-        modal.show();
-        // Menü schließen
-        const mobileMenu = document.getElementById('mobileMenu');
-        const bsCollapse = new bootstrap.Collapse(mobileMenu, { toggle: false });
-        bsCollapse.hide();
+        zeigeModal('urlaubskalenderModal');
+        schliesseMobileMenu();
     });
     
     // Bundesland-Auswahl (Desktop und Mobile)
@@ -1004,42 +1976,27 @@ function initEventListeners() {
     // Mobile Menü Buttons
     document.getElementById('btnMobileSpeichern').addEventListener('click', function() {
         speichereAlleZeilen();
-        // Menü schließen
-        const mobileMenu = document.getElementById('mobileMenu');
-        const bsCollapse = new bootstrap.Collapse(mobileMenu, { toggle: false });
-        bsCollapse.hide();
+        schliesseMobileMenu();
     });
     
     document.getElementById('btnMobileExportCSV').addEventListener('click', function() {
         exportiereCSV();
-        // Menü schließen
-        const mobileMenu = document.getElementById('mobileMenu');
-        const bsCollapse = new bootstrap.Collapse(mobileMenu, { toggle: false });
-        bsCollapse.hide();
+        schliesseMobileMenu();
     });
     
     document.getElementById('btnMobileImportCSV').addEventListener('click', function() {
         document.getElementById('csvFileInput').click();
-        // Menü schließen
-        const mobileMenu = document.getElementById('mobileMenu');
-        const bsCollapse = new bootstrap.Collapse(mobileMenu, { toggle: false });
-        bsCollapse.hide();
+        schliesseMobileMenu();
     });
     
     document.getElementById('btnMobileBackup').addEventListener('click', function() {
         erstelleBackup();
-        // Menü schließen
-        const mobileMenu = document.getElementById('mobileMenu');
-        const bsCollapse = new bootstrap.Collapse(mobileMenu, { toggle: false });
-        bsCollapse.hide();
+        schliesseMobileMenu();
     });
     
     document.getElementById('btnMobileRestore').addEventListener('click', function() {
         document.getElementById('backupFileInput').click();
-        // Menü schließen
-        const mobileMenu = document.getElementById('mobileMenu');
-        const bsCollapse = new bootstrap.Collapse(mobileMenu, { toggle: false });
-        bsCollapse.hide();
+        schliesseMobileMenu();
     });
     
     // Wochenstunden speichern (Mobile)
@@ -1047,12 +2004,24 @@ function initEventListeners() {
         speichereWochenstunden();
     });
     
+    // Live-Update der Stunden pro Tag Anzeige bei Eingabe (Mobile)
+    document.getElementById('wochenstundenMobile').addEventListener('input', function() {
+        const wert = this.value;
+        const pattern = /^\d+:\d{2}$/;
+        if (pattern.test(wert)) {
+            const parts = wert.split(':');
+            const stunden = parseInt(parts[0]);
+            const minuten = parseInt(parts[1]);
+            if (!isNaN(stunden) && !isNaN(minuten) && minuten < 60) {
+                wochenstunden = stunden + (minuten / 60);
+                aktualisiereStundenProTagAnzeige();
+            }
+        }
+    });
+    
     document.getElementById('btnMobileDrucken').addEventListener('click', function() {
         drucken();
-        // Menü schließen
-        const mobileMenu = document.getElementById('mobileMenu');
-        const bsCollapse = new bootstrap.Collapse(mobileMenu, { toggle: false });
-        bsCollapse.hide();
+        schliesseMobileMenu();
     });
     
     // Übertrag Vormonat speichern
@@ -1096,6 +2065,21 @@ function initEventListeners() {
         speichereWochenstunden();
     });
     
+    // Live-Update der Stunden pro Tag Anzeige bei Eingabe (Desktop)
+    document.getElementById('wochenstunden').addEventListener('input', function() {
+        const wert = this.value;
+        const pattern = /^\d+:\d{2}$/;
+        if (pattern.test(wert)) {
+            const parts = wert.split(':');
+            const stunden = parseInt(parts[0]);
+            const minuten = parseInt(parts[1]);
+            if (!isNaN(stunden) && !isNaN(minuten) && minuten < 60) {
+                wochenstunden = stunden + (minuten / 60);
+                aktualisiereStundenProTagAnzeige();
+            }
+        }
+    });
+    
     document.getElementById('backupFileInput').addEventListener('change', function() {
         stelleBackupWiederHer();
     });
@@ -1124,12 +2108,40 @@ function initEventListeners() {
                 markiereAlsUngespeichert(tag);
                 
                 // Nur neu berechnen wenn NICHT das Stunden-Feld geändert wurde
-                if (field !== 'stunden') {
+                if (field !== FIELDS.STUNDEN) {
                     manuellEditierteStunden.delete(tag);
                     berechneZeile(tag, false);
                     berechneAlleZeilen();
                 } else {
                     manuellEditierteStunden.add(tag);
+                    
+                    // Prüfe ob es ein Urlaubs-/Kranktag ist und passe die Tage an
+                    const von1Input = row.querySelector('[data-field="von1"]');
+                    if (von1Input) {
+                        const von1Value = von1Input.value.trim();
+                        if (von1Value === 'Urlaub' || von1Value === 'Krank') {
+                            const stundenInput = row.querySelector('[data-field="stunden"]');
+                            if (stundenInput) {
+                                const stundenWert = parseStundenZuDezimal(stundenInput.value);
+                                const tagesStunden = berechneTaeglicheUrlaubsstunden();
+                                const datum = erstelleDatumFuerTag(tag);
+                                const istKrank = von1Value === 'Krank';
+                                
+                                // Wenn Stunden ungefähr einem halben Tag entsprechen (±0.5 Stunden Toleranz)
+                                if (Math.abs(stundenWert - (tagesStunden / 2)) < 0.5) {
+                                    aktualisiereUrlaubstageProTag(datum, 0.5, istKrank);
+                                    aktualisiereUrlaubsliste();
+                                    aktualisiereUrlaubskalenderBadge();
+                                } else if (Math.abs(stundenWert - tagesStunden) < 0.5) {
+                                    // Ganzer Tag
+                                    aktualisiereUrlaubstageProTag(datum, 1.0, istKrank);
+                                    aktualisiereUrlaubsliste();
+                                    aktualisiereUrlaubskalenderBadge();
+                                }
+                            }
+                        }
+                    }
+                    
                     berechneAlleZeilen(true);
                 }
             }
@@ -1137,6 +2149,61 @@ function initEventListeners() {
     }, true); // useCapture = true für bessere Event-Erfassung
     
     // Zeit-Normalisierung bei Blur (wenn Benutzer Feld verlässt)
+/**
+ * Entfernt die Urlaubstag-Markierung von einer Zeile/Card und setzt alle Felder zurück
+ * @param {HTMLElement} row - Die Zeile (TR) oder Card (DIV) Element
+ * @param {boolean} loescheVon1 - Ob das Von1-Feld auch geleert werden soll (nur bei Stunden-Feld-Änderung)
+ */
+function entferneUrlaubstagMarkierung(row, loescheVon1 = false) {
+    if (!row) return;
+    
+    if (row.tagName === 'TR') {
+        // Desktop Tabelle
+        row.classList.remove('urlaub-row');
+        
+        // Setze alle Felder wie bei normalem Arbeitstag zurück (leer)
+        const von1Input = row.querySelector(`[data-field="${FIELDS.VON1}"]`);
+        const bis1Input = row.querySelector(`[data-field="${FIELDS.BIS1}"]`);
+        const von2Input = row.querySelector(`[data-field="${FIELDS.VON2}"]`);
+        const bis2Input = row.querySelector(`[data-field="${FIELDS.BIS2}"]`);
+        const vornachInput = row.querySelector(`[data-field="${FIELDS.VORNACH}"]`);
+        const stundenInput = row.querySelector(`[data-field="${FIELDS.STUNDEN}"]`);
+        
+        if (loescheVon1 && von1Input && von1Input.value.trim().toLowerCase() === 'urlaub') {
+            von1Input.value = '';
+        }
+        if (bis1Input) bis1Input.value = '';
+        if (von2Input) von2Input.value = '';
+        if (bis2Input) bis2Input.value = '';
+        if (vornachInput) vornachInput.value = '';
+        if (stundenInput) stundenInput.value = '0:00';
+    } else {
+        // Mobile Card
+        row.classList.remove('urlaub-card');
+        const header = row.querySelector('.day-card-header');
+        if (header) {
+            header.classList.remove('urlaub-header');
+        }
+        
+        // Setze alle Felder wie bei normalem Arbeitstag zurück (leer)
+        const von1Input = row.querySelector('[data-field="von1"]');
+        const bis1Input = row.querySelector('[data-field="bis1"]');
+        const von2Input = row.querySelector('[data-field="von2"]');
+        const bis2Input = row.querySelector('[data-field="bis2"]');
+        const vornachInput = row.querySelector('[data-field="vornach"]');
+        const stundenInput = row.querySelector('[data-field="stunden"]');
+        
+        if (loescheVon1 && von1Input && von1Input.value.trim().toLowerCase() === 'urlaub') {
+            von1Input.value = '';
+        }
+        if (bis1Input) bis1Input.value = '';
+        if (von2Input) von2Input.value = '';
+        if (bis2Input) bis2Input.value = '';
+        if (vornachInput) vornachInput.value = '';
+        if (stundenInput) stundenInput.value = '0:00';
+    }
+}
+
     document.addEventListener('blur', function(e) {
         // Prüfe ob das Element ein time-input ist
         if (e.target && e.target.classList && e.target.classList.contains('time-input')) {
@@ -1148,20 +2215,33 @@ function initEventListeners() {
                 const row = e.target.closest('tr') || e.target.closest('.day-card');
                 if (row && row.dataset && row.dataset.tag) {
                     const tag = parseInt(row.dataset.tag);
-                    const datum = new Date(aktuellesJahr, aktuellerMonat, tag);
+                    const datum = erstelleDatumFuerTag(tag);
                     const urlaubCheck = originalValue.trim().toLowerCase();
                     
                     if (urlaubCheck === 'urlaub') {
                         // "Urlaub" eingegeben - füge Urlaubstag hinzu
                         fuegeUrlaubstagAutomatischHinzu(tag);
                         return; // Keine weitere Verarbeitung nötig
-                    } else {
-                        // "Urlaub" wurde gelöscht oder anderer Text - prüfe ob Urlaubstag gespeichert ist
-                        const vorhandeneUrlaubstage = ladeUrlaubstageProTag(datum);
+                    } else if (urlaubCheck === 'krank') {
+                        // "Krank" eingegeben - wird von handleUrlaubKrankChange behandelt
+                        return; // Keine weitere Verarbeitung nötig
+                    } else if (urlaubCheck === '') {
+                        // Feld wurde geleert - prüfe ob Urlaubstag gespeichert ist
+                        const vorhandeneUrlaubstage = holeUrlaubstag(datum);
                         if (vorhandeneUrlaubstage > 0) {
-                            // Urlaubstag war gespeichert, aber "Urlaub" wurde entfernt - lösche ihn
+                            // Urlaubstag war gespeichert, aber Feld wurde geleert - lösche ihn
                             const datumKey = `${datum.getFullYear()}-${String(datum.getMonth() + 1).padStart(2, '0')}-${String(datum.getDate()).padStart(2, '0')}`;
-                            localStorage.removeItem(`urlaub_tage_${datumKey}`);
+                            // Lösche Urlaubstag und Krank-Status
+                            loescheUrlaubUndKrank(datum);
+                            
+                            // Lösche den kompletten Tag aus zeiterfassungDaten
+                            const monatsKey = getMonatsKey(aktuellesJahr, aktuellerMonat);
+                            if (zeiterfassungDaten[monatsKey] && zeiterfassungDaten[monatsKey].tage && zeiterfassungDaten[monatsKey].tage[tag]) {
+                                delete zeiterfassungDaten[monatsKey].tage[tag];
+                            }
+                            
+                            // Speichere Änderungen
+                            speichereDatenInLocalStorage();
                             
                             // Aktualisiere Listen
                             aktualisiereUrlaubsliste();
@@ -1169,48 +2249,15 @@ function initEventListeners() {
                             
                             // Entferne Urlaub-Markierung von der Zeile/Card
                             const row = e.target.closest('tr') || e.target.closest('.day-card');
-                            if (row) {
-                                if (row.tagName === 'TR') {
-                                    row.classList.remove('urlaub-row');
-                                    
-                                    // Setze alle Felder wie bei normalem Arbeitstag zurück (leer)
-                                    const bis1Input = row.querySelector('[data-field="bis1"]');
-                                    const von2Input = row.querySelector('[data-field="von2"]');
-                                    const bis2Input = row.querySelector('[data-field="bis2"]');
-                                    const vornachInput = row.querySelector('[data-field="vornach"]');
-                                    const stundenInput = row.querySelector('[data-field="stunden"]');
-                                    
-                                    if (bis1Input) bis1Input.value = '';
-                                    if (von2Input) von2Input.value = '';
-                                    if (bis2Input) bis2Input.value = '';
-                                    if (vornachInput) vornachInput.value = '';
-                                    if (stundenInput) stundenInput.value = '0:00';
-                                } else {
-                                    row.classList.remove('urlaub-card');
-                                    const header = row.querySelector('.day-card-header');
-                                    if (header) {
-                                        header.classList.remove('urlaub-header');
-                                    }
-                                    
-                                    // Setze alle Felder wie bei normalem Arbeitstag zurück (leer)
-                                    const bis1Input = row.querySelector('[data-field="bis1"]');
-                                    const von2Input = row.querySelector('[data-field="von2"]');
-                                    const bis2Input = row.querySelector('[data-field="bis2"]');
-                                    const vornachInput = row.querySelector('[data-field="vornach"]');
-                                    const stundenInput = row.querySelector('[data-field="stunden"]');
-                                    
-                                    if (bis1Input) bis1Input.value = '';
-                                    if (von2Input) von2Input.value = '';
-                                    if (bis2Input) bis2Input.value = '';
-                                    if (vornachInput) vornachInput.value = '';
-                                    if (stundenInput) stundenInput.value = '0:00';
-                                }
-                            }
+                            entferneUrlaubstagMarkierung(row, false);
                             
                             // Berechne alle Zeilen neu
                             berechneAlleZeilen();
                             
-                            zeigeToast('Urlaubstag entfernt', 'info');
+                            // Prüfe ob es ein Kranktag war
+                            const warKrank = istKranktag(datum);
+                            const typ = warKrank ? 'Kranktag' : 'Urlaubstag';
+                            zeigeToast(`${typ} entfernt`, 'info');
                             return; // Keine weitere Verarbeitung nach Löschung
                         }
                     }
@@ -1218,85 +2265,69 @@ function initEventListeners() {
             }
             
             // Wenn Stunden-Feld manuell geändert wurde, berechne Urlaubstage
-            if (field === 'stunden') {
+            if (field === FIELDS.STUNDEN) {
                 const row = e.target.closest('tr') || e.target.closest('.day-card');
                 if (row && row.dataset && row.dataset.tag) {
                     const tag = parseInt(row.dataset.tag);
-                    const datum = new Date(aktuellesJahr, aktuellerMonat, tag);
+                    const datum = erstelleDatumFuerTag(tag);
                     
-                    // Prüfe ob dieser Tag ein Urlaubstag ist
-                    if (istUrlaubstag(datum)) {
+                    // Prüfe ob dieser Tag ein Urlaubstag ODER Kranktag ist
+                    const istUrlaub = istUrlaubstag(datum);
+                    const istKrank = istKranktag(datum);
+                    
+                    if (istUrlaub || istKrank) {
                         // Parse Stunden
                         const stundenValue = originalValue.trim();
                         
-                        // Wenn Stunden leer oder 0:00, lösche Urlaubstag
+                        // Wenn Stunden leer oder 0:00, lösche Urlaubs-/Kranktag
                         if (!stundenValue || stundenValue === 'XXXXX' || stundenValue === '0:00' || stundenValue === '0') {
-                            // Lösche Urlaubstag aus LocalStorage
+                            // Lösche Urlaubs-/Kranktag aus LocalStorage
                             const datumKey = `${datum.getFullYear()}-${String(datum.getMonth() + 1).padStart(2, '0')}-${String(datum.getDate()).padStart(2, '0')}`;
-                            localStorage.removeItem(`urlaub_tage_${datumKey}`);
+                            // Lösche Urlaubstag und Krank-Status
+                            loescheUrlaubUndKrank(datum);
+
+                            // Lösche den kompletten Tag aus zeiterfassungDaten
+                            const monatsKey = getMonatsKey(aktuellesJahr, aktuellerMonat);
+                            if (zeiterfassungDaten[monatsKey] && zeiterfassungDaten[monatsKey].tage && zeiterfassungDaten[monatsKey].tage[tag]) {
+                                delete zeiterfassungDaten[monatsKey].tage[tag];
+                            }
+                            
+                            // Speichere Änderungen
+                            speichereDatenInLocalStorage();
 
                             // Aktualisiere Listen
                             aktualisiereUrlaubsliste();
                             aktualisiereUrlaubskalenderBadge();
                             
                             // Entferne Urlaub-Markierung von der Zeile/Card
-                            if (row) {
-                                if (row.tagName === 'TR') {
-                                    row.classList.remove('urlaub-row');
-                                    
-                                    // Setze alle Felder wie bei normalem Arbeitstag zurück (leer)
-                                    const von1Input = row.querySelector('[data-field="von1"]');
-                                    const bis1Input = row.querySelector('[data-field="bis1"]');
-                                    const von2Input = row.querySelector('[data-field="von2"]');
-                                    const bis2Input = row.querySelector('[data-field="bis2"]');
-                                    const vornachInput = row.querySelector('[data-field="vornach"]');
-                                    
-                                    if (von1Input && von1Input.value.trim().toLowerCase() === 'urlaub') {
-                                        von1Input.value = '';
-                                    }
-                                    if (bis1Input) bis1Input.value = '';
-                                    if (von2Input) von2Input.value = '';
-                                    if (bis2Input) bis2Input.value = '';
-                                    if (vornachInput) vornachInput.value = '';
-                                } else {
-                                    row.classList.remove('urlaub-card');
-                                    const header = row.querySelector('.day-card-header');
-                                    if (header) {
-                                        header.classList.remove('urlaub-header');
-                                    }
-                                    
-                                    // Setze alle Felder wie bei normalem Arbeitstag zurück (leer)
-                                    const von1Input = row.querySelector('[data-field="von1"]');
-                                    const bis1Input = row.querySelector('[data-field="bis1"]');
-                                    const von2Input = row.querySelector('[data-field="von2"]');
-                                    const bis2Input = row.querySelector('[data-field="bis2"]');
-                                    const vornachInput = row.querySelector('[data-field="vornach"]');
-                                    
-                                    if (von1Input && von1Input.value.trim().toLowerCase() === 'urlaub') {
-                                        von1Input.value = '';
-                                    }
-                                    if (bis1Input) bis1Input.value = '';
-                                    if (von2Input) von2Input.value = '';
-                                    if (bis2Input) bis2Input.value = '';
-                                    if (vornachInput) vornachInput.value = '';
-                                }
-                            }
+                            entferneUrlaubstagMarkierung(row, true);
                             
-                            zeigeToast('Urlaubstag entfernt', 'info');
+                            const typ = istKrank ? 'Kranktag' : 'Urlaubstag';
+                            zeigeToast(`${typ} entfernt`, 'info');
                         } else {
-                            // Stunden vorhanden - berechne und speichere Urlaubstage
+                            // Stunden vorhanden - berechne und speichere Urlaubs-/Kranktage
                             const parts = stundenValue.split(':');
                             if (parts.length === 2) {
                                 const stunden = parseInt(parts[0]) || 0;
                                 const minuten = parseInt(parts[1]) || 0;
                                 const gesamtStunden = stunden + (minuten / 60);
                                 
-                                // Berechne Urlaubstage basierend auf Stunden
-                                const urlaubstage = berechneUrlaubstageAusStunden(gesamtStunden);
+                                // Berechne Urlaubstage basierend auf Stunden (funktioniert auch für Kranktage)
+                                const tageWert = berechneUrlaubstageAusStunden(gesamtStunden);
                                 
-                                // Speichere Urlaubstage für diesen Tag
-                                aktualisiereUrlaubstageProTag(datum, urlaubstage);
+                                // Speichere Tage für diesen Tag (behält Krank-Status bei)
+                                aktualisiereUrlaubstageProTag(datum, tageWert, istKrank);
                                 
+                                // Markiere diesen Tag als manuell editiert, damit die Stunden nicht überschrieben werden
+                                manuellEditierteStunden.add(tag);
+                                
+                                // Zeige Feedback
+                                const typ = istKrank ? 'Kranktag' : 'Urlaubstag';
+                                if (tageWert === 0.5) {
+                                    zeigeToast(`${typ} auf halben Tag aktualisiert`, 'info');
+                                } else if (tageWert === 1.0) {
+                                    zeigeToast(`${typ} auf ganzen Tag aktualisiert`, 'info');
+                                }
                             }
                         }
                     }
@@ -1320,8 +2351,97 @@ function initEventListeners() {
     }, true); // useCapture = true für bessere Event-Erfassung
 }
 
+/**
+ * Erstellt ein Bestätigungs-Modal (XSS-sicher)
+ * @param {string} id - Die ID des Modals
+ * @param {string} titel - Der Titel des Modals
+ * @param {string} nachricht - Die Nachricht im Modal-Body
+ * @param {string} abbruchText - Text für Abbrechen-Button
+ * @param {string} bestaetigenText - Text für Bestätigen-Button
+ * @param {Function} onBestaetigen - Callback-Funktion bei Bestätigung
+ * @returns {Object} Das Modal-Element und die Bootstrap-Modal-Instanz
+ */
+function erstelleBestaetigenModal(id, titel, nachricht, abbruchText, bestaetigenText, onBestaetigen) {
+    // Modal-Container
+    const modal = document.createElement('div');
+    modal.className = 'modal fade';
+    modal.id = id;
+    
+    // Modal-Dialog
+    const modalDialog = document.createElement('div');
+    modalDialog.className = 'modal-dialog modal-dialog-centered';
+    
+    // Modal-Content
+    const modalContent = document.createElement('div');
+    modalContent.className = 'modal-content';
+    
+    // Modal-Header
+    const modalHeader = document.createElement('div');
+    modalHeader.className = 'modal-header bg-warning';
+    
+    const modalTitle = document.createElement('h5');
+    modalTitle.className = 'modal-title';
+    
+    const icon = document.createElement('i');
+    icon.className = 'bi bi-exclamation-triangle';
+    modalTitle.appendChild(icon);
+    modalTitle.appendChild(document.createTextNode(' ' + titel));
+    
+    const closeButton = document.createElement('button');
+    closeButton.type = 'button';
+    closeButton.className = 'btn-close';
+    closeButton.setAttribute('data-bs-dismiss', 'modal');
+    
+    modalHeader.appendChild(modalTitle);
+    modalHeader.appendChild(closeButton);
+    
+    // Modal-Body
+    const modalBody = document.createElement('div');
+    modalBody.className = 'modal-body';
+    modalBody.textContent = nachricht;
+    
+    // Modal-Footer
+    const modalFooter = document.createElement('div');
+    modalFooter.className = 'modal-footer';
+    
+    const abbruchButton = document.createElement('button');
+    abbruchButton.type = 'button';
+    abbruchButton.className = 'btn btn-secondary';
+    abbruchButton.setAttribute('data-bs-dismiss', 'modal');
+    
+    const abbruchIcon = document.createElement('i');
+    abbruchIcon.className = 'bi bi-x-circle';
+    abbruchButton.appendChild(abbruchIcon);
+    abbruchButton.appendChild(document.createTextNode(' ' + abbruchText));
+    
+    const bestaetigenButton = document.createElement('button');
+    bestaetigenButton.type = 'button';
+    bestaetigenButton.className = 'btn btn-primary';
+    bestaetigenButton.id = `btn${id}Bestaetigen`;
+    
+    const bestaetigenIcon = document.createElement('i');
+    bestaetigenIcon.className = 'bi bi-arrow-right-circle';
+    bestaetigenButton.appendChild(bestaetigenIcon);
+    bestaetigenButton.appendChild(document.createTextNode(' ' + bestaetigenText));
+    
+    modalFooter.appendChild(abbruchButton);
+    modalFooter.appendChild(bestaetigenButton);
+    
+    // Zusammenbauen
+    modalContent.appendChild(modalHeader);
+    modalContent.appendChild(modalBody);
+    modalContent.appendChild(modalFooter);
+    modalDialog.appendChild(modalContent);
+    modal.appendChild(modalDialog);
+    
+    // Event-Listener für Bestätigen-Button
+    bestaetigenButton.addEventListener('click', onBestaetigen);
+    
+    return { modal, bestaetigenButton };
+}
+
 // ===================================
-// Prüfe ungespeicherte Daten und lade Monat
+// Prüfe ungespeicherte Daten und lade Monat (XSS-sicher refactored)
 // ===================================
 async function pruefeUndLadeMonat() {
     const jahr = parseInt(document.getElementById('jahrSelect').value);
@@ -1329,51 +2449,32 @@ async function pruefeUndLadeMonat() {
     
     // Prüfe ob es ungespeicherte Änderungen gibt
     if (ungespeicherteTage.size > 0) {
-        // Zeige Bestätigungsdialog
-        const modal = document.createElement('div');
-        modal.className = 'modal fade';
-        modal.id = 'warningModal';
-        modal.innerHTML = `
-            <div class="modal-dialog modal-dialog-centered">
-                <div class="modal-content">
-                    <div class="modal-header bg-warning">
-                        <h5 class="modal-title">
-                            <i class="bi bi-exclamation-triangle"></i> Ungespeicherte Änderungen
-                        </h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                    </div>
-                    <div class="modal-body">
-                        <p>Es gibt noch ungespeicherte Änderungen für ${ungespeicherteTage.size} Tag(e).</p>
-                        <p>Möchten Sie den Monat wechseln? Ungespeicherte Änderungen gehen verloren.</p>
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
-                            <i class="bi bi-x-circle"></i> Abbrechen
-                        </button>
-                        <button type="button" class="btn btn-primary" id="btnMonatWechseln">
-                            <i class="bi bi-arrow-right-circle"></i> Monat wechseln
-                        </button>
-                    </div>
-                </div>
-            </div>
-        `;
+        // Erstelle Bestätigungsdialog mit sicherer DOM-Manipulation
+        const nachricht = `Es gibt noch ungespeicherte Änderungen für ${ungespeicherteTage.size} Tag(e).\n\nMöchten Sie den Monat wechseln? Ungespeicherte Änderungen gehen verloren.`;
+        
+        const { modal } = erstelleBestaetigenModal(
+            'warningModal',
+            'Ungespeicherte Änderungen',
+            nachricht,
+            'Abbrechen',
+            'Monat wechseln',
+            async function() {
+                // Ungespeicherte Änderungen verwerfen
+                ungespeicherteTage.clear();
+                bsModal.hide();
+                
+                // Modal nach dem Schließen entfernen
+                modal.addEventListener('hidden.bs.modal', async function() {
+                    modal.remove();
+                    // Jetzt Monat laden
+                    await ladeMonat(jahr, monat);
+                });
+            }
+        );
         
         document.body.appendChild(modal);
         const bsModal = new bootstrap.Modal(modal);
         
-        // Event Listener für "Monat wechseln" Button
-        document.getElementById('btnMonatWechseln').addEventListener('click', async function() {
-            // Ungespeicherte Änderungen verwerfen
-            ungespeicherteTage.clear();
-            bsModal.hide();
-            
-            // Modal nach dem Schließen entfernen
-            modal.addEventListener('hidden.bs.modal', async function() {
-                modal.remove();
-                // Jetzt Monat laden
-                await ladeMonat(jahr, monat);
-            });
-        });
         
         // Modal nach Abbrechen entfernen
         modal.addEventListener('hidden.bs.modal', function() {
@@ -1427,7 +2528,8 @@ async function ladeFeiertage(jahr) {
         
         return feiertageDaten;
     } catch (error) {
-        // Bei Fehler leere Map zurückgeben
+        console.error('Feiertage-API Fehler:', error);
+        zeigeToast('Feiertage konnten nicht geladen werden', 'warning');
         return new Map();
     }
 }
@@ -1438,12 +2540,33 @@ function istFeiertag(jahr, monat, tag, feiertage) {
         return null; // Feature deaktiviert
     }
     
-    // Formatiere Datum als YYYY-MM-DD ohne Zeitzone-Probleme
-    const monatString = String(monat + 1).padStart(2, '0');
-    const tagString = String(tag).padStart(2, '0');
-    const datumString = `${jahr}-${monatString}-${tagString}`;
+    // Erstelle Datum-Objekt und verwende istDatumFeiertag()
+    const datum = new Date(jahr, monat, tag);
+    const datumString = formatiereDatumLokal(datum);
     
+    // Gib den Namen des Feiertags zurück (oder null)
     return feiertage.get(datumString) || null;
+}
+
+/**
+ * Hilfsfunktion: Setzt Urlaubstag-Informationen in einem DOM-Element (TR oder Card)
+ * @param {HTMLElement} element - Das DOM-Element (TR oder Card)
+ * @param {Date} datum - Das Datum des Urlaubstags
+ * @param {number} tag - Der Tag im Monat
+ * @param {string} abwesenheitsTyp - "Urlaub" oder "Krank"
+ */
+function setzeUrlaubstagInElement(element, datum, tag, abwesenheitsTyp) {
+    if (!element) return;
+    
+    const von1 = element.querySelector('[data-field="von1"]');
+    
+    // Setze Von1 auf "Urlaub" oder "Krank"
+    // WICHTIG: Lösche KEINE anderen Felder hier, da diese später von ladeDatenFuerMonat() geladen werden
+    // Dies verhindert, dass gespeicherte von2/bis2/vornach Werte verloren gehen
+    if (von1) von1.value = abwesenheitsTyp;
+    
+    // WICHTIG: Entferne aus manuellEditierteStunden, damit berechneZeile() funktioniert
+    manuellEditierteStunden.delete(tag);
 }
 
 // ===================================
@@ -1505,48 +2628,38 @@ async function ladeMonat(jahr, monat) {
         erstelleMobileCard(tag, wochentag, istFreierTag, feiertagName, istUrlaub);
     }
     
-    
-    // Gespeicherte Daten laden
-    ladeDatenFuerMonat(jahr, monat);
-    
     // Prüfe alle Urlaubstage und stelle sicher, dass sie korrekt befüllt sind
+    // WICHTIG: Dies muss VOR ladeDatenFuerMonat() passieren, damit von1="Krank"/"Urlaub" gesetzt ist
     for (let tag = 1; tag <= anzahlTage; tag++) {
         const datum = new Date(jahr, monat, tag);
+        const datumString = formatiereDatumLokal(datum);
         if (istUrlaubstag(datum)) {
             const tr = document.querySelector(`#zeiterfassungBody tr[data-tag="${tag}"]`);
             const card = document.querySelector(`#mobileCardContainer .day-card[data-tag="${tag}"]`);
             
-            // Prüfe ob Von1-Feld leer ist (keine gespeicherten Daten)
-            const von1Input = tr ? tr.querySelector('[data-field="von1"]') : card?.querySelector('[data-field="von1"]');
-            if (von1Input && (!von1Input.value || von1Input.value.trim() === '')) {
-                // Setze "Urlaub" und Urlaubsstunden
-                if (tr) {
-                    const von1 = tr.querySelector('[data-field="von1"]');
-                    const stunden = tr.querySelector('[data-field="stunden"]');
-                    if (von1) von1.value = 'Urlaub';
-                    if (stunden && wochenstunden > 0) {
-                        const tagesStunden = berechneTaeglicheUrlaubsstunden();
-                        const std = Math.floor(tagesStunden);
-                        const min = Math.round((tagesStunden - std) * 60);
-                        stunden.value = `${std}:${min.toString().padStart(2, '0')}`;
-                    } else if (stunden) {
-                        stunden.value = '0:00';
-                    }
-                }
-                
-                if (card) {
-                    const von1 = card.querySelector('[data-field="von1"]');
-                    const stunden = card.querySelector('[data-field="stunden"]');
-                    if (von1) von1.value = 'Urlaub';
-                    if (stunden && wochenstunden > 0) {
-                        const tagesStunden = berechneTaeglicheUrlaubsstunden();
-                        const std = Math.floor(tagesStunden);
-                        const min = Math.round((tagesStunden - std) * 60);
-                        stunden.value = `${std}:${min.toString().padStart(2, '0')}`;
-                    } else if (stunden) {
-                        stunden.value = '0:00';
-                    }
-                }
+            // Setze "Urlaub" oder "Krank" in Von1 (immer, auch wenn Feld bereits gefüllt ist)
+            const istKrank = istKranktag(datum);
+            const abwesenheitsTyp = istKrank ? 'Krank' : 'Urlaub';
+            
+            // Desktop: Setze Urlaubstag-Informationen
+            setzeUrlaubstagInElement(tr, datum, tag, abwesenheitsTyp);
+            
+            // Mobile: Setze Urlaubstag-Informationen
+            setzeUrlaubstagInElement(card, datum, tag, abwesenheitsTyp);
+        }
+    }
+    
+    // Gespeicherte Daten laden (NACH dem Urlaubstage-Loop, damit von1 bereits gesetzt ist)
+    ladeDatenFuerMonat(jahr, monat);
+    
+    // WICHTIG: Speichere Urlaubstage NACH dem Laden der Daten
+    // So werden die von2/bis2 Felder nicht überschrieben
+    for (let tag = 1; tag <= anzahlTage; tag++) {
+        const datum = new Date(jahr, monat, tag);
+        if (istUrlaubstag(datum)) {
+            const urlaubstageWert = holeUrlaubstag(datum);
+            if (urlaubstageWert > 0) {
+                speichereZeile(tag, true);
             }
         }
     }
@@ -1563,8 +2676,43 @@ async function ladeMonat(jahr, monat) {
     // Stelle sicher, dass alle Stunden-Felder editierbar sind
     macheStundenFelderEditierbar();
     
-    // SOLL-Stunden automatisch berechnen
+    // SOLL-Stunden automatisch berechnen wenn noch nicht vorhanden
+    // Die Funktion prüft selbst, ob bereits SOLL-Stunden gespeichert sind
+    // und überschreibt diese NICHT. Berechnung erfolgt nur bei neuen Monaten.
     berechneSollStundenAutomatisch();
+    
+    // Auf mobilen Geräten zum aktuellen Tag scrollen
+    scrollZuAktuellemTag();
+}
+
+// ===================================
+// Scroll zu aktuellem Tag auf mobilen Geräten
+// ===================================
+function scrollZuAktuellemTag() {
+    // Nur auf mobilen Geräten (Bildschirmbreite < 992px)
+    if (window.innerWidth >= 992) {
+        return;
+    }
+    
+    // Prüfe ob wir im aktuellen Monat sind
+    const heute = new Date();
+    if (heute.getFullYear() !== aktuellesJahr || heute.getMonth() !== aktuellerMonat) {
+        return; // Nicht scrollen wenn nicht aktueller Monat
+    }
+    
+    // Finde die Card für den heutigen Tag
+    const heutigerTag = heute.getDate();
+    const card = document.querySelector(`#mobileCardContainer .day-card[data-tag="${heutigerTag}"]`);
+    
+    if (card) {
+        // Warte kurz bis alle Elemente gerendert sind
+        setTimeout(() => {
+            card.scrollIntoView({
+                behavior: 'smooth',
+                block: 'start'
+            });
+        }, 300);
+    }
 }
 
 // ===================================
@@ -1574,9 +2722,19 @@ function berechneSollStundenAutomatisch() {
     const beschaeftigungsgradInput = document.getElementById('beschaeftigungsgrad').value;
     const sollStundenInput = document.getElementById('sollStunden');
     
-    // Nur berechnen wenn Beschäftigungsgrad vorhanden und SOLL-Stunden leer oder 0:00
-    if (!beschaeftigungsgradInput || (sollStundenInput.value && sollStundenInput.value !== '0:00' && sollStundenInput.value !== '')) {
-        return; // Nicht überschreiben wenn bereits ein Wert vorhanden ist
+    // WICHTIG: Nur berechnen wenn SOLL-Stunden noch nicht geladen wurden
+    // Dies verhindert, dass bei jedem ladeMonat() die SOLL-Stunden überschrieben werden
+    const monatsKey = getMonatsKey(aktuellesJahr, aktuellerMonat);
+    const monatsDaten = zeiterfassungDaten[monatsKey];
+    
+    // Wenn bereits SOLL-Stunden für diesen Monat gespeichert sind, nicht überschreiben
+    if (monatsDaten && monatsDaten.sollStunden) {
+        return; // Bereits gespeicherte SOLL-Stunden nicht überschreiben
+    }
+    
+    // Nur berechnen wenn Beschäftigungsgrad vorhanden
+    if (!beschaeftigungsgradInput) {
+        return;
     }
     
     // Beschäftigungsgrad parsen (z.B. "80%" oder "0.8" oder "80")
@@ -1608,7 +2766,7 @@ function berechneSollStundenAutomatisch() {
     // - Wochenstunden: Wird aus dem Eingabefeld geladen (Standard: 39:00)
     // - Arbeitstage: Ändern Sie 5 auf Ihre Arbeitstage pro Woche (z.B. 4, 5, 6)
     // ===================================
-    const ARBEITSTAGE_PRO_WOCHE = 5; // ← HIER ANPASSEN: Arbeitstage pro Woche
+    // Verwende die globale Konstante ARBEITSTAGE_PRO_WOCHE (definiert am Dateianfang)
     
     // Verwende die globale Variable wochenstunden (wird aus Eingabefeld geladen)
     const stundenProTag = (wochenstunden * beschaeftigungsgrad) / ARBEITSTAGE_PRO_WOCHE;
@@ -1618,7 +2776,7 @@ function berechneSollStundenAutomatisch() {
     let arbeitstage = 0;
     
     for (let tag = 1; tag <= anzahlTage; tag++) {
-        const datum = new Date(aktuellesJahr, aktuellerMonat, tag);
+        const datum = erstelleDatumFuerTag(tag);
         const istWochenende = (datum.getDay() === 0 || datum.getDay() === 6);
         
         // Prüfe ob Feiertag (wenn Feature aktiviert)
@@ -1674,7 +2832,7 @@ function kopiereTag(tag) {
     }
     
     // Prüfe welche Ansicht aktiv ist
-    const istMobileAnsicht = window.innerWidth < 992;
+    const istMobileAnsicht = window.innerWidth < MOBILE_BREAKPOINT;
     
     // Finde die Zeile/Card für diesen Tag in der aktiven Ansicht
     let element;
@@ -1728,7 +2886,7 @@ function fuegeTagEin(tag) {
     }
     
     // Prüfe welche Ansicht aktiv ist
-    const istMobileAnsicht = window.innerWidth < 992;
+    const istMobileAnsicht = window.innerWidth < MOBILE_BREAKPOINT;
     
     // Finde die Zeile/Card für diesen Tag in der aktiven Ansicht
     let element;
@@ -1992,11 +3150,31 @@ function zeigeToast(nachricht, typ = 'success') {
     const toast = document.createElement('div');
     toast.className = `toast-notification toast-${typ}`;
     toast.textContent = nachricht;
+    
+    // Bestimme Hintergrundfarbe basierend auf Typ
+    let backgroundColor;
+    switch(typ) {
+        case 'success':
+            backgroundColor = '#28a745';
+            break;
+        case 'warning':
+            backgroundColor = '#ffc107';
+            break;
+        case 'info':
+            backgroundColor = '#17a2b8';
+            break;
+        case 'danger':
+            backgroundColor = '#dc3545';
+            break;
+        default:
+            backgroundColor = '#6c757d';
+    }
+    
     toast.style.cssText = `
         position: fixed;
         top: 80px;
         right: 20px;
-        background: ${typ === 'success' ? '#28a745' : '#ffc107'};
+        background: ${backgroundColor};
         color: white;
         padding: 12px 20px;
         border-radius: 5px;
@@ -2042,13 +3220,30 @@ function erstelleZeile(tag, wochentag, istWochenende, feiertagName = null, istUr
     }
     tr.dataset.tag = tag;
     
+    // Prüfe ob Kranktag
+    const datum = erstelleDatumFuerTag(tag);
+    const istKrank = istKranktag(datum);
+    
+    
     // Tag
     const tdTag = document.createElement('td');
     tdTag.className = 'text-center fw-bold';
     if (istUrlaub) {
-        tdTag.innerHTML = `${tag}<br><small style="font-weight: normal; font-size: 0.8em; color: #198754;">Urlaub</small>`;
+        if (istKrank) {
+            setElementContentSafe(tdTag, tag, {
+                subText: 'Krank',
+                subTextColor: '#dc3545'
+            });
+        } else {
+            setElementContentSafe(tdTag, tag, {
+                subText: 'Urlaub',
+                subTextColor: '#198754'
+            });
+        }
     } else if (feiertagName) {
-        tdTag.innerHTML = `${tag}<br><small style="font-weight: normal; font-size: 0.8em;">${feiertagName}</small>`;
+        setElementContentSafe(tdTag, tag, {
+            subText: feiertagName
+        });
     } else {
         tdTag.textContent = tag;
     }
@@ -2061,8 +3256,8 @@ function erstelleZeile(tag, wochentag, istWochenende, feiertagName = null, istUr
     tr.appendChild(tdWochentag);
     
     if (istWochenende || istUrlaub) {
-        // Wochenende oder Urlaub - XXXXX oder "Urlaub" vorbelegen, aber editierbar
-        const vorbelegung = istUrlaub ? 'Urlaub' : 'XXXXX';
+        // Wochenende oder Urlaub - XXXXX oder "Urlaub"/"Krank" vorbelegen, aber editierbar
+        const vorbelegung = istUrlaub ? (istKrank ? 'Krank' : 'Urlaub') : 'XXXXX';
         // Von 1 - Vorbelegung eintragen
         const tdVon1 = document.createElement('td');
         const inputVon1 = document.createElement('input');
@@ -2071,6 +3266,50 @@ function erstelleZeile(tag, wochentag, istWochenende, feiertagName = null, istUr
         inputVon1.value = vorbelegung;
         inputVon1.placeholder = 'HH:MM';
         inputVon1.dataset.field = 'von1';
+        // Speichere den ursprünglichen Wert
+        let vorherWert = inputVon1.value;
+        
+        // Event-Listener für Urlaub hinzufügen/entfernen
+        inputVon1.addEventListener('focus', function() {
+            vorherWert = inputVon1.value.trim();
+        });
+        
+        const handleUrlaubKrankChange = function() {
+            const value = inputVon1.value.trim();
+            // Nur reagieren wenn sich der Wert geändert hat
+            if (value !== vorherWert) {
+                const datum = erstelleDatumFuerTag(tag);
+                
+                if (value === 'Urlaub' && vorherWert !== 'Urlaub') {
+                    // Urlaubstag hinzufügen - OHNE ladeMonat(), das macht speichereZeile()
+                    aktualisiereUrlaubstageProTag(datum, 1.0, false);
+                    fuegeUrlaubstagAutomatischHinzu(tag);
+                    // Nur Toast anzeigen wenn vorher leer war (nicht bei Wechsel von Krank zu Urlaub)
+                    if (vorherWert === '') {
+                        zeigeToast('Urlaubstag hinzugefügt', 'success');
+                    }
+                } else if (value === 'Krank' && vorherWert !== 'Krank') {
+                    // Kranktag hinzufügen - OHNE ladeMonat(), das macht speichereZeile()
+                    aktualisiereUrlaubstageProTag(datum, 1.0, true);
+                    fuegeUrlaubstagAutomatischHinzu(tag);
+                    // Nur Toast anzeigen wenn vorher leer war (nicht bei Wechsel von Urlaub zu Krank)
+                    if (vorherWert === '') {
+                        zeigeToast('Kranktag hinzugefügt', 'success');
+                    }
+                } else if (value === '' && (vorherWert === 'Urlaub' || vorherWert === 'Krank')) {
+                    // Urlaub/Krank entfernen - OHNE ladeMonat(), das macht speichereZeile()
+                    const typ = vorherWert === 'Krank' ? 'Kranktag' : 'Urlaubstag';
+                    aktualisiereUrlaubstageProTag(datum, 0);
+                    aktualisiereUrlaubsliste();
+                    aktualisiereUrlaubskalenderBadge();
+                    zeigeToast(`${typ} entfernt`, 'info');
+                }
+                vorherWert = value;
+            }
+        };
+        
+        inputVon1.addEventListener('blur', handleUrlaubKrankChange);
+        inputVon1.addEventListener('change', handleUrlaubKrankChange);
         tdVon1.appendChild(inputVon1);
         tr.appendChild(tdVon1);
         
@@ -2124,9 +3363,12 @@ function erstelleZeile(tag, wochentag, istWochenende, feiertagName = null, istUr
         inputStunden.className = 'time-input calculated-field';
         // Bei Urlaub: (Wochenstunden * Beschäftigungsgrad) / 5, sonst XXXXX
         if (istUrlaub && wochenstunden > 0) {
+            const datum = erstelleDatumFuerTag(tag);
+            const urlaubstageWert = holeUrlaubstag(datum);
             const tagesStunden = berechneTaeglicheUrlaubsstunden();
-            const stunden = Math.floor(tagesStunden);
-            const minuten = Math.round((tagesStunden - stunden) * 60);
+            const urlaubsStunden = tagesStunden * urlaubstageWert;
+            const stunden = Math.floor(urlaubsStunden);
+            const minuten = Math.round((urlaubsStunden - stunden) * 60);
             inputStunden.value = `${stunden}:${minuten.toString().padStart(2, '0')}`;
         } else {
             inputStunden.value = istUrlaub ? '0:00' : 'XXXXX';
@@ -2144,6 +3386,50 @@ function erstelleZeile(tag, wochentag, istWochenende, feiertagName = null, istUr
         inputVon1.className = 'time-input';
         inputVon1.placeholder = 'HH:MM';
         inputVon1.dataset.field = 'von1';
+        // Speichere den ursprünglichen Wert
+        let vorherWert = '';
+        
+        // Event-Listener für Urlaub hinzufügen/entfernen
+        inputVon1.addEventListener('focus', function() {
+            vorherWert = inputVon1.value.trim();
+        });
+        
+        const handleUrlaubKrankChange = function() {
+            const value = inputVon1.value.trim();
+            // Nur reagieren wenn sich der Wert geändert hat
+            if (value !== vorherWert) {
+                const datum = erstelleDatumFuerTag(tag);
+                
+                if (value === 'Urlaub' && vorherWert !== 'Urlaub') {
+                    // Urlaubstag hinzufügen - OHNE ladeMonat(), das macht speichereZeile()
+                    aktualisiereUrlaubstageProTag(datum, 1.0, false);
+                    fuegeUrlaubstagAutomatischHinzu(tag);
+                    // Nur Toast anzeigen wenn vorher leer war (nicht bei Wechsel von Krank zu Urlaub)
+                    if (vorherWert === '') {
+                        zeigeToast('Urlaubstag hinzugefügt', 'success');
+                    }
+                } else if (value === 'Krank' && vorherWert !== 'Krank') {
+                    // Kranktag hinzufügen - OHNE ladeMonat(), das macht speichereZeile()
+                    aktualisiereUrlaubstageProTag(datum, 1.0, true);
+                    fuegeUrlaubstagAutomatischHinzu(tag);
+                    // Nur Toast anzeigen wenn vorher leer war (nicht bei Wechsel von Urlaub zu Krank)
+                    if (vorherWert === '') {
+                        zeigeToast('Kranktag hinzugefügt', 'success');
+                    }
+                } else if (value === '' && (vorherWert === 'Urlaub' || vorherWert === 'Krank')) {
+                    // Urlaub/Krank entfernen - OHNE ladeMonat(), das macht speichereZeile()
+                    const typ = vorherWert === 'Krank' ? 'Kranktag' : 'Urlaubstag';
+                    aktualisiereUrlaubstageProTag(datum, 0);
+                    aktualisiereUrlaubsliste();
+                    aktualisiereUrlaubskalenderBadge();
+                    zeigeToast(`${typ} entfernt`, 'info');
+                }
+                vorherWert = value;
+            }
+        };
+        
+        inputVon1.addEventListener('blur', handleUrlaubKrankChange);
+        inputVon1.addEventListener('change', handleUrlaubKrankChange);
         tdVon1.appendChild(inputVon1);
         tr.appendChild(tdVon1);
         
@@ -2231,7 +3517,9 @@ function erstelleZeile(tag, wochentag, istWochenende, feiertagName = null, istUr
         // Woche Kopieren Button
         const btnWocheKopieren = document.createElement('button');
         btnWocheKopieren.className = 'btn btn-sm btn-outline-primary';
-        btnWocheKopieren.innerHTML = '<i class="bi bi-calendar-week"></i>';
+        const iconWocheKopieren = document.createElement('i');
+        iconWocheKopieren.className = 'bi bi-calendar-week';
+        btnWocheKopieren.appendChild(iconWocheKopieren);
         btnWocheKopieren.title = 'vergangene Woche kopieren';
         btnWocheKopieren.addEventListener('click', function() {
             kopiereWoche(tag);
@@ -2241,7 +3529,9 @@ function erstelleZeile(tag, wochentag, istWochenende, feiertagName = null, istUr
         // Woche Einfügen Button
         const btnWocheEinfuegen = document.createElement('button');
         btnWocheEinfuegen.className = 'btn btn-sm btn-outline-success';
-        btnWocheEinfuegen.innerHTML = '<i class="bi bi-calendar-week-fill"></i>';
+        const iconWocheEinfuegen = document.createElement('i');
+        iconWocheEinfuegen.className = 'bi bi-calendar-week-fill';
+        btnWocheEinfuegen.appendChild(iconWocheEinfuegen);
         btnWocheEinfuegen.title = 'Woche einfügen';
         btnWocheEinfuegen.addEventListener('click', function() {
             fuegeWocheEin(tag);
@@ -2260,7 +3550,9 @@ function erstelleZeile(tag, wochentag, istWochenende, feiertagName = null, istUr
     // Kopieren Button
     const btnKopieren = document.createElement('button');
     btnKopieren.className = 'btn btn-sm btn-outline-secondary';
-    btnKopieren.innerHTML = '<i class="bi bi-clipboard"></i>';
+    const iconKopieren = document.createElement('i');
+    iconKopieren.className = 'bi bi-clipboard';
+    btnKopieren.appendChild(iconKopieren);
     btnKopieren.title = 'Tag kopieren';
     btnKopieren.addEventListener('click', function() {
         kopiereTag(tag);
@@ -2270,7 +3562,9 @@ function erstelleZeile(tag, wochentag, istWochenende, feiertagName = null, istUr
     // Einfügen Button
     const btnEinfuegen = document.createElement('button');
     btnEinfuegen.className = 'btn btn-sm btn-outline-info';
-    btnEinfuegen.innerHTML = '<i class="bi bi-clipboard-check"></i>';
+    const iconEinfuegen = document.createElement('i');
+    iconEinfuegen.className = 'bi bi-clipboard-check';
+    btnEinfuegen.appendChild(iconEinfuegen);
     btnEinfuegen.title = 'Tag einfügen';
     btnEinfuegen.addEventListener('click', function() {
         fuegeTagEin(tag);
@@ -2279,13 +3573,29 @@ function erstelleZeile(tag, wochentag, istWochenende, feiertagName = null, istUr
     
     // Speichern Button
     const btnSpeichern = document.createElement('button');
-    btnSpeichern.className = 'btn btn-sm btn-primary btn-save-row';
-    btnSpeichern.innerHTML = '<i class="bi bi-save"></i>';
+    btnSpeichern.className = 'btn btn-sm btn-outline-secondary card-save-btn-default btn-save-row';
+    const iconSpeichern = document.createElement('i');
+    iconSpeichern.className = 'bi bi-save';
+    btnSpeichern.appendChild(iconSpeichern);
     btnSpeichern.title = 'Zeile speichern';
+    btnSpeichern.dataset.tag = tag;
+    btnSpeichern.dataset.saveBtn = '';
     btnSpeichern.addEventListener('click', function() {
         speichereZeileMitFeedback(tag);
     });
     tagesButtonRow.appendChild(btnSpeichern);
+    
+    // Tag komplett löschen Button
+    const btnLoeschen = document.createElement('button');
+    btnLoeschen.className = 'btn btn-sm btn-outline-danger ms-1';
+    const iconLoeschen = document.createElement('i');
+    iconLoeschen.className = 'bi bi-trash';
+    btnLoeschen.appendChild(iconLoeschen);
+    btnLoeschen.title = 'Tag komplett löschen (alle Einträge)';
+    btnLoeschen.addEventListener('click', function() {
+        loescheTagKomplett(tag);
+    });
+    tagesButtonRow.appendChild(btnLoeschen);
     
     buttonContainer.appendChild(tagesButtonRow);
     tdAktion.appendChild(buttonContainer);
@@ -2293,10 +3603,295 @@ function erstelleZeile(tag, wochentag, istWochenende, feiertagName = null, istUr
     tr.appendChild(tdAktion);
     
     tbody.appendChild(tr);
+    
+    // Event-Listener für alle Input-Felder in der Zeile, um Button-Stil zu ändern
+    const allInputs = tr.querySelectorAll('.time-input, .hours-input');
+    const saveBtn = tr.querySelector('[data-save-btn]');
+    
+    if (saveBtn && allInputs.length > 0) {
+        allInputs.forEach(input => {
+            input.addEventListener('input', function() {
+                // Wenn Zeile rot ist (unsaved-changes), Button fett machen
+                if (tr.classList.contains('unsaved-changes')) {
+                    saveBtn.classList.remove('btn-outline-secondary', 'card-save-btn-default');
+                    saveBtn.classList.add('btn-primary', 'card-save-btn-changed');
+                } else {
+                    // Sonst Button hell lassen (auch bei saved-changes)
+                    saveBtn.classList.remove('btn-primary', 'card-save-btn-changed');
+                    saveBtn.classList.add('btn-outline-secondary', 'card-save-btn-default');
+                }
+            });
+        });
+    }
+    
+    // MutationObserver um Button-Stil zu aktualisieren wenn Zeilen-Klassen sich ändern
+    const observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.attributeName === 'class') {
+                const saveBtn = tr.querySelector('[data-save-btn]');
+                if (saveBtn) {
+                    // Wenn Zeile gespeichert oder keine Änderungen hat, Button hell machen
+                    if (!tr.classList.contains('unsaved-changes')) {
+                        saveBtn.classList.remove('btn-primary', 'card-save-btn-changed');
+                        saveBtn.classList.add('btn-outline-secondary', 'card-save-btn-default');
+                    }
+                }
+            }
+        });
+    });
+    
+    observer.observe(tr, { attributes: true, attributeFilter: ['class'] });
 }
 
 // ===================================
 // Mobile Card erstellen
+/**
+ * Erstellt die Aktions-Buttons für eine Mobile Card (XSS-sicher)
+ * @param {number} tag - Der Tag
+ * @param {string} wochentag - Der Wochentag
+ * @returns {HTMLElement} Das Button-Container-Element
+ */
+function erstelleMobileCardButtons(tag, wochentag) {
+    const actionsDiv = document.createElement('div');
+    actionsDiv.className = 'card-actions';
+    actionsDiv.style.cssText = 'display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap;';
+    
+    // Wochenbuttons nur für Sonntag
+    if (wochentag === 'So') {
+        const btnKopiereWoche = document.createElement('button');
+        btnKopiereWoche.className = 'btn btn-sm btn-outline-primary';
+        btnKopiereWoche.style.cssText = 'flex: 1 1 45%; font-size: 0.75rem; padding: 6px 8px;';
+        const iconKopWoche = document.createElement('i');
+        iconKopWoche.className = 'bi bi-calendar-week';
+        btnKopiereWoche.appendChild(iconKopWoche);
+        btnKopiereWoche.appendChild(document.createTextNode(' vergangene Woche kopieren'));
+        btnKopiereWoche.addEventListener('click', () => kopiereWoche(tag));
+        actionsDiv.appendChild(btnKopiereWoche);
+        
+        const btnFuegeWocheEin = document.createElement('button');
+        btnFuegeWocheEin.className = 'btn btn-sm btn-outline-success';
+        btnFuegeWocheEin.style.cssText = 'flex: 1 1 45%; font-size: 0.75rem; padding: 6px 8px;';
+        const iconFuegeWoche = document.createElement('i');
+        iconFuegeWoche.className = 'bi bi-calendar-week-fill';
+        btnFuegeWocheEin.appendChild(iconFuegeWoche);
+        btnFuegeWocheEin.appendChild(document.createTextNode(' Woche einfügen'));
+        btnFuegeWocheEin.addEventListener('click', () => fuegeWocheEin(tag));
+        actionsDiv.appendChild(btnFuegeWocheEin);
+    }
+    
+    // Kopieren Button
+    const btnKopieren = document.createElement('button');
+    btnKopieren.className = 'btn btn-sm btn-outline-secondary';
+    btnKopieren.style.cssText = 'flex: 1; font-size: 0.8rem; padding: 6px 8px;';
+    const iconKop = document.createElement('i');
+    iconKop.className = 'bi bi-clipboard';
+    btnKopieren.appendChild(iconKop);
+    btnKopieren.appendChild(document.createTextNode(' Kopieren'));
+    btnKopieren.addEventListener('click', () => kopiereTag(tag));
+    actionsDiv.appendChild(btnKopieren);
+    
+    // Einfügen Button
+    const btnEinfuegen = document.createElement('button');
+    btnEinfuegen.className = 'btn btn-sm btn-outline-info';
+    btnEinfuegen.style.cssText = 'flex: 1; font-size: 0.8rem; padding: 6px 8px;';
+    const iconEinf = document.createElement('i');
+    iconEinf.className = 'bi bi-clipboard-check';
+    btnEinfuegen.appendChild(iconEinf);
+    btnEinfuegen.appendChild(document.createTextNode(' Einfügen'));
+    btnEinfuegen.addEventListener('click', () => fuegeTagEin(tag));
+    actionsDiv.appendChild(btnEinfuegen);
+    
+    // Löschen Button
+    const btnLoeschen = document.createElement('button');
+    btnLoeschen.className = 'btn btn-sm btn-outline-danger';
+    btnLoeschen.style.cssText = 'flex: 1; font-size: 0.8rem; padding: 6px 8px;';
+    btnLoeschen.title = 'Tag komplett löschen';
+    const iconLoesch = document.createElement('i');
+    iconLoesch.className = 'bi bi-trash';
+    btnLoeschen.appendChild(iconLoesch);
+    btnLoeschen.appendChild(document.createTextNode(' Löschen'));
+    btnLoeschen.addEventListener('click', () => loescheTagKomplett(tag));
+    actionsDiv.appendChild(btnLoeschen);
+    
+    // Speichern Button
+    const btnSpeichern = document.createElement('button');
+    btnSpeichern.className = 'btn btn-sm btn-outline-secondary card-save-btn-default';
+    btnSpeichern.style.cssText = 'flex: 1; font-size: 0.8rem; padding: 6px 8px;';
+    btnSpeichern.dataset.tag = tag;
+    btnSpeichern.dataset.saveBtn = '';
+    const iconSpeich = document.createElement('i');
+    iconSpeich.className = 'bi bi-save';
+    btnSpeichern.appendChild(iconSpeich);
+    btnSpeichern.appendChild(document.createTextNode(' Speichern'));
+    btnSpeichern.addEventListener('click', () => speichereZeileMitFeedback(tag));
+    actionsDiv.appendChild(btnSpeichern);
+    
+    return actionsDiv;
+}
+
+/**
+ * Erstellt Zeiterfassungs-Felder für Mobile Card (XSS-sicher)
+ * @param {string} von1Value - Wert für Von1-Feld
+ * @param {string} bis1Value - Wert für Bis1-Feld
+ * @param {string} von2Value - Wert für Von2-Feld
+ * @param {string} bis2Value - Wert für Bis2-Feld
+ * @param {string} stundenValue - Wert für Stunden-Feld
+ * @param {string} gesamtValue - Wert für Gesamt-Feld
+ * @param {string} stundenLabel - Label für Stunden-Feld
+ * @returns {DocumentFragment} Fragment mit allen Zeitfeldern
+ */
+function erstelleZeiterfassungsFelder(von1Value, bis1Value, von2Value, bis2Value, stundenValue, gesamtValue, stundenLabel) {
+    const fragment = document.createDocumentFragment();
+    
+    // Arbeitszeit 1
+    const timeGroup1 = document.createElement('div');
+    timeGroup1.className = 'time-group';
+    
+    const label1 = document.createElement('label');
+    label1.className = 'time-group-label';
+    label1.textContent = 'Arbeitszeit 1' + (von1Value === 'XXXXX' ? ' (optional)' : '');
+    timeGroup1.appendChild(label1);
+    
+    const timeRow1 = document.createElement('div');
+    timeRow1.className = 'time-row';
+    
+    const von1Field = document.createElement('div');
+    von1Field.className = 'time-field';
+    const von1Label = document.createElement('label');
+    von1Label.textContent = 'Von';
+    const von1Input = document.createElement('input');
+    von1Input.type = 'text';
+    von1Input.className = 'time-input';
+    von1Input.placeholder = 'HH:MM';
+    von1Input.dataset.field = 'von1';
+    von1Input.value = von1Value;
+    von1Field.appendChild(von1Label);
+    von1Field.appendChild(von1Input);
+    
+    const bis1Field = document.createElement('div');
+    bis1Field.className = 'time-field';
+    const bis1Label = document.createElement('label');
+    bis1Label.textContent = 'Bis';
+    const bis1Input = document.createElement('input');
+    bis1Input.type = 'text';
+    bis1Input.className = 'time-input';
+    bis1Input.placeholder = 'HH:MM';
+    bis1Input.dataset.field = 'bis1';
+    bis1Input.value = bis1Value;
+    bis1Field.appendChild(bis1Label);
+    bis1Field.appendChild(bis1Input);
+    
+    timeRow1.appendChild(von1Field);
+    timeRow1.appendChild(bis1Field);
+    timeGroup1.appendChild(timeRow1);
+    fragment.appendChild(timeGroup1);
+    
+    // Arbeitszeit 2
+    const timeGroup2 = document.createElement('div');
+    timeGroup2.className = 'time-group';
+    
+    const label2 = document.createElement('label');
+    label2.className = 'time-group-label';
+    label2.textContent = 'Arbeitszeit 2 (optional)';
+    timeGroup2.appendChild(label2);
+    
+    const timeRow2 = document.createElement('div');
+    timeRow2.className = 'time-row';
+    
+    const von2Field = document.createElement('div');
+    von2Field.className = 'time-field';
+    const von2Label = document.createElement('label');
+    von2Label.textContent = 'Von';
+    const von2Input = document.createElement('input');
+    von2Input.type = 'text';
+    von2Input.className = 'time-input';
+    von2Input.placeholder = 'HH:MM';
+    von2Input.dataset.field = 'von2';
+    von2Input.value = von2Value;
+    von2Field.appendChild(von2Label);
+    von2Field.appendChild(von2Input);
+    
+    const bis2Field = document.createElement('div');
+    bis2Field.className = 'time-field';
+    const bis2Label = document.createElement('label');
+    bis2Label.textContent = 'Bis';
+    const bis2Input = document.createElement('input');
+    bis2Input.type = 'text';
+    bis2Input.className = 'time-input';
+    bis2Input.placeholder = 'HH:MM';
+    bis2Input.dataset.field = 'bis2';
+    bis2Input.value = bis2Value;
+    bis2Field.appendChild(bis2Label);
+    bis2Field.appendChild(bis2Input);
+    
+    timeRow2.appendChild(von2Field);
+    timeRow2.appendChild(bis2Field);
+    timeGroup2.appendChild(timeRow2);
+    fragment.appendChild(timeGroup2);
+    
+    // Vor/Nachbereitung
+    const timeGroup3 = document.createElement('div');
+    timeGroup3.className = 'time-group';
+    
+    const label3 = document.createElement('label');
+    label3.className = 'time-group-label';
+    label3.textContent = 'Vor/Nachbereitung/Bemerkung';
+    timeGroup3.appendChild(label3);
+    
+    const vornachField = document.createElement('div');
+    vornachField.className = 'time-field';
+    const vornachInput = document.createElement('input');
+    vornachInput.type = 'text';
+    vornachInput.className = 'time-input';
+    vornachInput.placeholder = 'HH:MM';
+    vornachInput.dataset.field = 'vornach';
+    vornachField.appendChild(vornachInput);
+    timeGroup3.appendChild(vornachField);
+    fragment.appendChild(timeGroup3);
+    
+    // Stunden
+    const timeGroup4 = document.createElement('div');
+    timeGroup4.className = 'time-group';
+    
+    const label4 = document.createElement('label');
+    label4.className = 'time-group-label';
+    label4.textContent = stundenLabel;
+    timeGroup4.appendChild(label4);
+    
+    const stundenField = document.createElement('div');
+    stundenField.className = 'time-field';
+    const stundenInput = document.createElement('input');
+    stundenInput.type = 'text';
+    stundenInput.className = 'time-input calculated-field';
+    stundenInput.placeholder = 'HH:MM';
+    stundenInput.dataset.field = 'stunden';
+    stundenInput.value = stundenValue;
+    stundenField.appendChild(stundenInput);
+    timeGroup4.appendChild(stundenField);
+    fragment.appendChild(timeGroup4);
+    
+    // Gesamt kumuliert
+    const gesamtDisplay = document.createElement('div');
+    gesamtDisplay.className = 'calculated-display total-display';
+    
+    const gesamtLabel = document.createElement('span');
+    gesamtLabel.className = 'calculated-label';
+    gesamtLabel.textContent = 'Gesamt kumuliert:';
+    
+    const gesamtValueSpan = document.createElement('span');
+    gesamtValueSpan.className = 'calculated-value';
+    gesamtValueSpan.dataset.field = 'gesamt';
+    gesamtValueSpan.textContent = gesamtValue;
+    
+    gesamtDisplay.appendChild(gesamtLabel);
+    gesamtDisplay.appendChild(gesamtValueSpan);
+    fragment.appendChild(gesamtDisplay);
+    
+    return fragment;
+}
+
+// ===================================
+// Erstelle Mobile Card (XSS-sicher refactored)
 // ===================================
 function erstelleMobileCard(tag, wochentag, istWochenende, feiertagName = null, istUrlaub = false) {
     const container = document.getElementById('mobileCardContainer');
@@ -2305,32 +3900,18 @@ function erstelleMobileCard(tag, wochentag, istWochenende, feiertagName = null, 
         return;
     }
     
+    // Prüfe ob Kranktag
+    const datum = erstelleDatumFuerTag(tag);
+    const istKrank = istKranktag(datum);
+    
+    
     // Card erstellen
     const card = document.createElement('div');
     card.className = `day-card ${istWochenende ? 'weekend-card' : ''} ${istUrlaub ? 'urlaub-card' : ''}`;
     card.dataset.tag = tag;
     
-    // Card Header
-    const header = document.createElement('div');
-    header.className = `day-card-header ${istWochenende ? 'weekend-header' : ''} ${istUrlaub ? 'urlaub-header' : ''}`;
-    
-    // Erstelle Wochentag-Text mit Urlaub/Feiertag inline
-    let wochentagText = wochentag;
-    if (istUrlaub) {
-        wochentagText += ' <span style="font-size: 0.85em; color: #d4edda;">(Urlaub)</span>';
-    } else if (feiertagName) {
-        wochentagText += ` <span style="font-size: 0.85em;">(${feiertagName})</span>`;
-    }
-    
-    header.innerHTML = `
-        <div>
-            <div class="day-number">${tag}</div>
-            <div class="day-name">${wochentagText}</div>
-        </div>
-        <div>
-            <i class="bi bi-${istUrlaub ? 'calendar-check' : istWochenende ? 'moon' : 'sun'}"></i>
-        </div>
-    `;
+    // Card Header - Sicher erstellt
+    const header = erstelleMobileCardHeader(tag, wochentag, istUrlaub, istKrank, feiertagName, istWochenende);
     card.appendChild(header);
     
     // Card Body
@@ -2339,12 +3920,15 @@ function erstelleMobileCard(tag, wochentag, istWochenende, feiertagName = null, 
     
     const vorbelegung = istUrlaub ? 'Urlaub' : 'XXXXX';
     
-    // Berechne Stunden-Wert für Urlaub (mit Beschäftigungsgrad)
+    // Berechne Stunden-Wert für Urlaub (mit Beschäftigungsgrad und gespeicherten Urlaubstagen)
     let stundenWert = 'XXXXX';
     if (istUrlaub && wochenstunden > 0) {
+        const datum = erstelleDatumFuerTag(tag);
+        const urlaubstageWert = holeUrlaubstag(datum);
         const tagesStunden = berechneTaeglicheUrlaubsstunden();
-        const stunden = Math.floor(tagesStunden);
-        const minuten = Math.round((tagesStunden - stunden) * 60);
+        const urlaubsStunden = tagesStunden * urlaubstageWert;
+        const stunden = Math.floor(urlaubsStunden);
+        const minuten = Math.round((urlaubsStunden - stunden) * 60);
         stundenWert = `${stunden}:${minuten.toString().padStart(2, '0')}`;
     } else if (istUrlaub) {
         stundenWert = '0:00';
@@ -2353,162 +3937,153 @@ function erstelleMobileCard(tag, wochentag, istWochenende, feiertagName = null, 
     if (istWochenende || istUrlaub) {
         // Wochenende oder Urlaub - Von/Bis Felder mit XXXXX vorbelegen (außer bei Urlaub)
         const zeitVorbelegung = istUrlaub ? '' : 'XXXXX';
-        body.innerHTML = `
-            <div class="time-group">
-                <label class="time-group-label">Arbeitszeit 1 (optional)</label>
-                <div class="time-row">
-                    <div class="time-field">
-                        <label>Von</label>
-                        <input type="text" class="time-input" placeholder="HH:MM"
-                               data-field="von1" value="${vorbelegung}">
-                    </div>
-                    <div class="time-field">
-                        <label>Bis</label>
-                        <input type="text" class="time-input" placeholder="HH:MM"
-                               data-field="bis1" value="${zeitVorbelegung}">
-                    </div>
-                </div>
-            </div>
-            
-            <div class="time-group">
-                <label class="time-group-label">Arbeitszeit 2 (optional)</label>
-                <div class="time-row">
-                    <div class="time-field">
-                        <label>Von</label>
-                        <input type="text" class="time-input" placeholder="HH:MM"
-                               data-field="von2" value="${zeitVorbelegung}">
-                    </div>
-                    <div class="time-field">
-                        <label>Bis</label>
-                        <input type="text" class="time-input" placeholder="HH:MM"
-                               data-field="bis2" value="${zeitVorbelegung}">
-                    </div>
-                </div>
-            </div>
-            
-            <div class="time-group">
-                <label class="time-group-label">Vor/Nachbereitung/Bemerkung</label>
-                <div class="time-field">
-                    <input type="text" class="time-input" placeholder="HH:MM"
-                           data-field="vornach">
-                </div>
-            </div>
-            
-            <div class="time-group">
-                <label class="time-group-label">Stunden (editierbar)</label>
-                <div class="time-field">
-                    <input type="text" class="time-input calculated-field" placeholder="HH:MM"
-                           data-field="stunden" value="${stundenWert}">
-                </div>
-            </div>
-            
-            <div class="calculated-display total-display">
-                <span class="calculated-label">Gesamt kumuliert:</span>
-                <span class="calculated-value" data-field="gesamt">XXXXX</span>
-            </div>
-            
-            <div class="card-actions" style="display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap;">
-                ${wochentag === 'So' ? `
-                <button class="btn btn-sm btn-outline-primary" onclick="kopiereWoche(${tag})" style="flex: 1 1 45%; font-size: 0.75rem; padding: 6px 8px;">
-                    <i class="bi bi-calendar-week"></i> vergangene Woche kopieren
-                </button>
-                <button class="btn btn-sm btn-outline-success" onclick="fuegeWocheEin(${tag})" style="flex: 1 1 45%; font-size: 0.75rem; padding: 6px 8px;">
-                    <i class="bi bi-calendar-week-fill"></i> Woche einfügen
-                </button>
-                ` : ''}
-                <button class="btn btn-sm btn-outline-secondary" onclick="kopiereTag(${tag})" style="flex: 1; font-size: 0.8rem; padding: 6px 8px;">
-                    <i class="bi bi-clipboard"></i> Kopieren
-                </button>
-                <button class="btn btn-sm btn-outline-info" onclick="fuegeTagEin(${tag})" style="flex: 1; font-size: 0.8rem; padding: 6px 8px;">
-                    <i class="bi bi-clipboard-check"></i> Einfügen
-                </button>
-                <button class="btn btn-sm btn-primary" onclick="speichereZeileMitFeedback(${tag})" style="flex: 1; font-size: 0.8rem; padding: 6px 8px;">
-                    <i class="bi bi-save"></i> Speichern
-                </button>
-            </div>
-        `;
+        // Bei Urlaub: Von1 = "Urlaub", alle anderen Felder leer
+        const von1Vorbelegung = istUrlaub ? 'Urlaub' : vorbelegung;
+        
+        // Sichere DOM-Erstellung statt innerHTML
+        const zeitfelder = erstelleZeiterfassungsFelder(
+            von1Vorbelegung,
+            zeitVorbelegung,
+            zeitVorbelegung,
+            zeitVorbelegung,
+            stundenWert,
+            'XXXXX',
+            'Stunden (editierbar)'
+        );
+        body.appendChild(zeitfelder);
+        
+        // Buttons sicher hinzufügen
+        const buttons = erstelleMobileCardButtons(tag, wochentag);
+        body.appendChild(buttons);
     } else {
         // Arbeitstag - Vollständige Ansicht
-        body.innerHTML = `
-            <div class="time-group">
-                <label class="time-group-label">Arbeitszeit 1</label>
-                <div class="time-row">
-                    <div class="time-field">
-                        <label>Von</label>
-                        <input type="text" class="time-input" placeholder="HH:MM" data-field="von1">
-                    </div>
-                    <div class="time-field">
-                        <label>Bis</label>
-                        <input type="text" class="time-input" placeholder="HH:MM" data-field="bis1">
-                    </div>
-                </div>
-            </div>
-            
-            <div class="time-group">
-                <label class="time-group-label">Arbeitszeit 2 (optional)</label>
-                <div class="time-row">
-                    <div class="time-field">
-                        <label>Von</label>
-                        <input type="text" class="time-input" placeholder="HH:MM" data-field="von2">
-                    </div>
-                    <div class="time-field">
-                        <label>Bis</label>
-                        <input type="text" class="time-input" placeholder="HH:MM" data-field="bis2">
-                    </div>
-                </div>
-            </div>
-            
-            <div class="time-group">
-                <label class="time-group-label">Vor/Nachbereitung/Bemerkung</label>
-                <div class="time-field">
-                    <input type="text" class="time-input" placeholder="HH:MM"
-                           data-field="vornach">
-                </div>
-            </div>
-            
-            <div class="time-group">
-                <label class="time-group-label">Stunden heute (editierbar)</label>
-                <div class="time-field">
-                    <input type="text" class="time-input calculated-field" placeholder="HH:MM"
-                           data-field="stunden" value="0:00">
-                </div>
-            </div>
-            
-            <div class="calculated-display total-display">
-                <span class="calculated-label">Gesamt kumuliert:</span>
-                <span class="calculated-value" data-field="gesamt">0:00</span>
-            </div>
-            
-            <div class="card-actions" style="display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap;">
-                ${wochentag === 'So' ? `
-                <button class="btn btn-sm btn-outline-primary" onclick="kopiereWoche(${tag})" style="flex: 1 1 45%; font-size: 0.75rem; padding: 6px 8px;">
-                    <i class="bi bi-calendar-week"></i> vergangene Woche kopieren
-                </button>
-                <button class="btn btn-sm btn-outline-success" onclick="fuegeWocheEin(${tag})" style="flex: 1 1 45%; font-size: 0.75rem; padding: 6px 8px;">
-                    <i class="bi bi-calendar-week-fill"></i> Woche einfügen
-                </button>
-                ` : ''}
-                <button class="btn btn-sm btn-outline-secondary" onclick="kopiereTag(${tag})" style="flex: 1; font-size: 0.8rem; padding: 6px 8px;">
-                    <i class="bi bi-clipboard"></i> Kopieren
-                </button>
-                <button class="btn btn-sm btn-outline-info" onclick="fuegeTagEin(${tag})" style="flex: 1; font-size: 0.8rem; padding: 6px 8px;">
-                    <i class="bi bi-clipboard-check"></i> Einfügen
-                </button>
-                <button class="btn btn-sm btn-primary" onclick="speichereZeileMitFeedback(${tag})" style="flex: 1; font-size: 0.8rem; padding: 6px 8px;">
-                    <i class="bi bi-save"></i> Speichern
-                </button>
-            </div>
-        `;
+        const zeitfelder = erstelleZeiterfassungsFelder(
+            '',
+            '',
+            '',
+            '',
+            '0:00',
+            '0:00',
+            'Stunden heute (editierbar)'
+        );
+        body.appendChild(zeitfelder);
+        
+        // Buttons sicher hinzufügen
+        const buttons = erstelleMobileCardButtons(tag, wochentag);
+        body.appendChild(buttons);
     }
     
     card.appendChild(body);
     container.appendChild(card);
+    
+    // Event-Listener für Von1-Feld (Urlaub hinzufügen/entfernen)
+    const von1Input = card.querySelector('[data-field="von1"]');
+    if (von1Input) {
+        let vorherWert = von1Input.value.trim();
+        
+        von1Input.addEventListener('focus', function() {
+            vorherWert = von1Input.value.trim();
+        });
+        
+        const handleUrlaubKrankChange = function() {
+            const value = von1Input.value.trim();
+            // Nur reagieren wenn sich der Wert geändert hat
+            if (value !== vorherWert) {
+                const datum = erstelleDatumFuerTag(tag);
+                
+                if (value === 'Urlaub' && vorherWert !== 'Urlaub') {
+                    // Urlaubstag hinzufügen - OHNE ladeMonat(), das macht speichereZeile()
+                    aktualisiereUrlaubstageProTag(datum, 1.0, false);
+                    fuegeUrlaubstagAutomatischHinzu(tag);
+                    // Nur Toast anzeigen wenn vorher leer war (nicht bei Wechsel von Krank zu Urlaub)
+                    if (vorherWert === '') {
+                        zeigeToast('Urlaubstag hinzugefügt', 'success');
+                    }
+                } else if (value === 'Krank' && vorherWert !== 'Krank') {
+                    // Kranktag hinzufügen - OHNE ladeMonat(), das macht speichereZeile()
+                    aktualisiereUrlaubstageProTag(datum, 1.0, true);
+                    fuegeUrlaubstagAutomatischHinzu(tag);
+                    // Nur Toast anzeigen wenn vorher leer war (nicht bei Wechsel von Urlaub zu Krank)
+                    if (vorherWert === '') {
+                        zeigeToast('Kranktag hinzugefügt', 'success');
+                    }
+                } else if (value === '' && (vorherWert === 'Urlaub' || vorherWert === 'Krank')) {
+                    // Urlaub/Krank entfernen - OHNE ladeMonat(), das macht speichereZeile()
+                    const typ = vorherWert === 'Krank' ? 'Kranktag' : 'Urlaubstag';
+                    aktualisiereUrlaubstageProTag(datum, 0);
+                    aktualisiereUrlaubsliste();
+                    aktualisiereUrlaubskalenderBadge();
+                    zeigeToast(`${typ} entfernt`, 'info');
+                }
+                vorherWert = value;
+            }
+        };
+        
+        von1Input.addEventListener('blur', handleUrlaubKrankChange);
+        von1Input.addEventListener('change', handleUrlaubKrankChange);
+    }
+    
+    // Event-Listener für alle Input-Felder in der Card, um Button-Stil zu ändern
+    const allInputs = card.querySelectorAll('.time-input');
+    const saveBtn = card.querySelector('[data-save-btn]');
+    
+    if (saveBtn && allInputs.length > 0) {
+        allInputs.forEach(input => {
+            input.addEventListener('input', function() {
+                // Wenn Card rot ist (unsaved-changes), Button fett machen
+                if (card.classList.contains('unsaved-changes')) {
+                    saveBtn.classList.remove('btn-outline-secondary', 'card-save-btn-default');
+                    saveBtn.classList.add('btn-primary', 'card-save-btn-changed');
+                } else {
+                    // Sonst Button hell lassen (auch bei saved-changes)
+                    saveBtn.classList.remove('btn-primary', 'card-save-btn-changed');
+                    saveBtn.classList.add('btn-outline-secondary', 'card-save-btn-default');
+                }
+            });
+        });
+    }
+    
+    // Lade gespeicherte Werte wenn vorhanden
+    const gespeicherteZeile = holeZeile(tag);
+    if (gespeicherteZeile) {
+        const von1Input = card.querySelector('[data-field="von1"]');
+        const bis1Input = card.querySelector('[data-field="bis1"]');
+        const von2Input = card.querySelector('[data-field="von2"]');
+        const bis2Input = card.querySelector('[data-field="bis2"]');
+        const vornachInput = card.querySelector('[data-field="vornach"]');
+        const stundenInput = card.querySelector('[data-field="stunden"]');
+        const gesamtSpan = card.querySelector('[data-field="gesamt"]');
+        
+        if (von1Input && gespeicherteZeile[FIELDS.VON1] !== undefined) {
+            von1Input.value = gespeicherteZeile[FIELDS.VON1];
+        }
+        if (bis1Input && gespeicherteZeile[FIELDS.BIS1] !== undefined) {
+            bis1Input.value = gespeicherteZeile[FIELDS.BIS1];
+        }
+        if (von2Input && gespeicherteZeile[FIELDS.VON2] !== undefined) {
+            von2Input.value = gespeicherteZeile[FIELDS.VON2];
+        }
+        if (bis2Input && gespeicherteZeile[FIELDS.BIS2] !== undefined) {
+            bis2Input.value = gespeicherteZeile[FIELDS.BIS2];
+        }
+        if (vornachInput && gespeicherteZeile[FIELDS.VORNACH] !== undefined) {
+            vornachInput.value = gespeicherteZeile[FIELDS.VORNACH];
+        }
+        if (stundenInput && gespeicherteZeile[FIELDS.STUNDEN] !== undefined) {
+            stundenInput.value = gespeicherteZeile[FIELDS.STUNDEN];
+        }
+        if (gesamtSpan && gespeicherteZeile[FIELDS.GESAMT] !== undefined) {
+            gesamtSpan.textContent = gespeicherteZeile[FIELDS.GESAMT];
+        }
+    }
 }
+
 
 // ===================================
 // Berechnungen
 // ===================================
 function berechneZeile(tag, skipStundenUpdate = false) {
+    
     // Desktop: Tabellenzeile
     const tr = document.querySelector(`#zeiterfassungBody tr[data-tag="${tag}"]`);
     // Mobile: Card
@@ -2537,21 +4112,39 @@ function berechneZeile(tag, skipStundenUpdate = false) {
     }
     
     
-    const von1Input = element.querySelector('[data-field="von1"]');
-    const bis1Input = element.querySelector('[data-field="bis1"]');
-    const von2Input = element.querySelector('[data-field="von2"]');
-    const bis2Input = element.querySelector('[data-field="bis2"]');
-    const vornachInput = element.querySelector('[data-field="vornach"]');
+    // WICHTIG: Werte aus beiden Quellen lesen und zusammenführen
+    // Wenn ein Wert in der Card vorhanden ist, verwende ihn, sonst den aus der Tabelle
+    const getFeldWert = (feldName) => {
+        // Zuerst aus dem aktiven Element (wo die Eingabe gemacht wurde)
+        const elementFeld = element.querySelector(`[data-field="${feldName}"]`);
+        let wert = elementFeld ? (elementFeld.value || elementFeld.textContent || '') : '';
+        
+        // Wenn leer und ein anderes Element existiert, versuche von dort zu lesen
+        if (!wert && element !== tr && tr) {
+            const trFeld = tr.querySelector(`[data-field="${feldName}"]`);
+            wert = trFeld ? (trFeld.value || '') : '';
+        } else if (!wert && element !== card && card) {
+            const cardFeld = card.querySelector(`[data-field="${feldName}"]`);
+            wert = cardFeld ? (cardFeld.value || cardFeld.textContent || '') : '';
+        }
+        
+        return wert;
+    };
     
-    if (!von1Input) {
+    const von1 = getFeldWert('von1').trim();
+    let bis1 = getFeldWert('bis1');
+    let von2 = getFeldWert('von2');
+    let bis2 = getFeldWert('bis2');
+    const vornachZeit = getFeldWert('vornach');
+    
+    // Normalisiere Zeiteingaben (z.B. "17" → "17:00")
+    bis1 = normalisiereZeitEingabe(bis1);
+    von2 = normalisiereZeitEingabe(von2);
+    bis2 = normalisiereZeitEingabe(bis2);
+    
+    if (!von1) {
         return;
     }
-    
-    const von1 = von1Input.value;
-    const bis1 = bis1Input.value;
-    const von2 = von2Input ? von2Input.value : '';
-    const bis2 = bis2Input ? bis2Input.value : '';
-    const vornachZeit = vornachInput ? vornachInput.value : '';
     
     
     // Stunden-Element finden aus dem ausgewählten Element
@@ -2566,12 +4159,127 @@ function berechneZeile(tag, skipStundenUpdate = false) {
         return; // Berechnung überspringen für manuell editierte Felder
     }
     
-    // Bei Urlaubstagen (Von1 = "Urlaub") keine Berechnung durchführen
-    // Der voreingestellte Wert im Stunden-Feld bleibt erhalten
-    if (von1 === 'Urlaub') {
-        return; // Berechnung überspringen für Urlaubstage
+    // NEUE URLAUBSLOGIK:
+    // Fall 1: Von1 = "Urlaub" oder "Krank" (ganzer Urlaubstag/Kranktag)
+    if (von1 === 'Urlaub' || von1 === 'Krank') {
+        const istKrank = von1 === 'Krank';
+        const datum = erstelleDatumFuerTag(tag);
+        
+        // Prüfe ob Von2 und Bis2 ausgefüllt sind UND im korrekten Format HH:MM (halber Urlaubstag + Arbeitszeit)
+        const istZeitFormatKorrekt = (zeit) => zeit && /^\d{1,2}:\d{2}$/.test(zeit.trim());
+        const hatArbeitszeit = istZeitFormatKorrekt(von2) && istZeitFormatKorrekt(bis2);
+        
+        // Prüfe ob Bemerkung Stunden enthält (Format HH:MM oder H:MM)
+        const hatBemerkungStunden = vornachZeit && vornachZeit !== 'XXXXX' && /^\d{1,2}:\d{2}$/.test(vornachZeit.trim());
+        
+        if (hatArbeitszeit || hatBemerkungStunden) {
+            // Halber Urlaubstag + Arbeitszeit
+            let gesamtStunden = 0;
+            
+            // Halbe Urlaubsstunden
+            if (wochenstunden > 0) {
+                const tagesStunden = berechneTaeglicheUrlaubsstunden();
+                gesamtStunden += tagesStunden / 2;
+            }
+            
+            // Arbeitszeit Von2-Bis2
+            if (hatArbeitszeit) {
+                const diff2 = berechneZeitdifferenz(von2, bis2);
+                if (diff2 >= 0) {
+                    gesamtStunden += diff2;
+                }
+            }
+            
+            // Vor/Nachbereitung addieren
+            if (hatBemerkungStunden) {
+                const vornachDezimal = parseStundenZuDezimal(vornachZeit);
+                gesamtStunden += vornachDezimal;
+            }
+            
+            // Stunden setzen - BEIDE Ansichten aktualisieren (Desktop UND Mobile)
+            const formatted = formatStunden(gesamtStunden);
+            if (!skipStundenUpdate) {
+                // Desktop
+                if (tr) {
+                    const trStunden = tr.querySelector('[data-field="stunden"]');
+                    if (trStunden && trStunden.tagName === 'INPUT') {
+                        trStunden.value = formatted;
+                    }
+                }
+                // Mobile
+                if (card) {
+                    const cardStunden = card.querySelector('[data-field="stunden"]');
+                    if (cardStunden) {
+                        cardStunden.textContent = formatted;
+                    }
+                }
+            }
+            
+            // Halben Urlaubstag im Kalender vermerken
+            aktualisiereUrlaubstageProTag(datum, 0.5, istKrank);
+            aktualisiereUrlaubsliste();
+            aktualisiereUrlaubskalenderBadge();
+            
+            return formatted; // Rückgabe des berechneten Werts
+        } else {
+            // Urlaubstag ohne Arbeitszeit - verwende IMMER den gespeicherten Wert aus dem Kalender
+            let formatted = '0:00';
+            if (wochenstunden > 0) {
+                // Hole den gespeicherten Urlaubstag-Wert (kann 0.5 oder 1.0 sein)
+                const urlaubstageWert = holeUrlaubstag(datum);
+                const tagesStunden = berechneTaeglicheUrlaubsstunden();
+                const urlaubsStunden = tagesStunden * urlaubstageWert;
+                const stunden = Math.floor(urlaubsStunden);
+                const minuten = Math.round((urlaubsStunden - stunden) * 60);
+                
+                formatted = `${stunden}:${minuten.toString().padStart(2, '0')}`;
+                if (!skipStundenUpdate) {
+                    // Desktop
+                    if (tr) {
+                        const trStunden = tr.querySelector('[data-field="stunden"]');
+                        if (trStunden && trStunden.tagName === 'INPUT') {
+                            trStunden.value = formatted;
+                        }
+                    }
+                    // Mobile
+                    if (card) {
+                        const cardStunden = card.querySelector('[data-field="stunden"]');
+                        if (cardStunden) {
+                            cardStunden.textContent = formatted;
+                        }
+                    }
+                }
+                
+                // WICHTIG: Verwende den bereits gespeicherten Wert, überschreibe ihn NICHT
+                // Dies stellt sicher, dass halbe Tage aus dem Kalender erhalten bleiben
+                // Nur wenn noch kein Wert gespeichert ist (urlaubstageWert === 0), setze 1.0
+                if (urlaubstageWert === 0) {
+                    aktualisiereUrlaubstageProTag(datum, 1.0, istKrank);
+                    aktualisiereUrlaubsliste();
+                    aktualisiereUrlaubskalenderBadge();
+                }
+            } else if (!skipStundenUpdate) {
+                // Desktop
+                if (tr) {
+                    const trStunden = tr.querySelector('[data-field="stunden"]');
+                    if (trStunden && trStunden.tagName === 'INPUT') {
+                        trStunden.value = '0:00';
+                    }
+                }
+                // Mobile
+                if (card) {
+                    const cardStunden = card.querySelector('[data-field="stunden"]');
+                    if (cardStunden) {
+                        cardStunden.textContent = '0:00';
+                    }
+                }
+            }
+            
+            return formatted; // Rückgabe des berechneten Werts
+        }
     }
     
+    // Fall 2: Normale Arbeitstage (kein Urlaub)
     let gesamtStunden = 0;
     
     // Periode 1 - nur berechnen wenn nicht XXXXX
@@ -2598,18 +4306,30 @@ function berechneZeile(tag, skipStundenUpdate = false) {
     }
     
     // Stunden formatieren und setzen - NUR wenn nicht manuell editiert wird
+    // BEIDE Ansichten aktualisieren (Desktop UND Mobile)
+    const formatted = formatStunden(gesamtStunden);
     if (!skipStundenUpdate) {
-        const formatted = formatStunden(gesamtStunden);
-        
-        if (stundenElement.tagName === 'INPUT') {
-            stundenElement.value = formatted;
-        } else {
-            stundenElement.textContent = formatted;
+        // Desktop
+        if (tr) {
+            const trStunden = tr.querySelector('[data-field="stunden"]');
+            if (trStunden && trStunden.tagName === 'INPUT') {
+                trStunden.value = formatted;
+            }
+        }
+        // Mobile
+        if (card) {
+            const cardStunden = card.querySelector('[data-field="stunden"]');
+            if (cardStunden) {
+                cardStunden.textContent = formatted;
+            }
         }
     }
+    
+    return formatted; // Rückgabe des berechneten Werts
 }
-
 function berechneAlleZeilen(skipStundenUpdate = false) {
+    
+    
     // Desktop Tabelle
     const tbody = document.getElementById('zeiterfassungBody');
     const zeilen = tbody.querySelectorAll('tr');
@@ -2626,21 +4346,8 @@ function berechneAlleZeilen(skipStundenUpdate = false) {
     for (let i = 0; i < anzahlTage; i++) {
         const tag = i + 1;
         
-        // Zeile/Card berechnen - mit skipStundenUpdate Parameter
-        berechneZeile(tag, skipStundenUpdate);
-        
-        // Stunden dieser Zeile holen (Desktop oder Mobile)
-        let stundenWert = '0:00';
-        
-        if (zeilen[i]) {
-            const stundenInput = zeilen[i].querySelector('[data-field="stunden"]');
-            stundenWert = stundenInput.value;
-        } else if (cards[i]) {
-            const stundenInput = cards[i].querySelector('[data-field="stunden"]');
-            if (stundenInput) {
-                stundenWert = stundenInput.value;
-            }
-        }
+        // Zeile/Card berechnen und Stundenwert direkt erhalten
+        const stundenWert = berechneZeile(tag, false) || '0:00';
         
         let stundenDezimal = 0;
         if (stundenWert !== 'XXXXX' && stundenWert !== '') {
@@ -2656,13 +4363,17 @@ function berechneAlleZeilen(skipStundenUpdate = false) {
         // Desktop
         if (zeilen[i]) {
             const gesamtInput = zeilen[i].querySelector('[data-field="gesamt"]');
-            gesamtInput.value = formatted;
+            if (gesamtInput) {
+                gesamtInput.value = formatted;
+            }
         }
         
         // Mobile
         if (cards[i]) {
             const gesamtSpan = cards[i].querySelector('[data-field="gesamt"]');
-            gesamtSpan.textContent = formatted;
+            if (gesamtSpan) {
+                gesamtSpan.textContent = formatted;
+            }
         }
     }
     
@@ -2775,23 +4486,114 @@ function aktualisiereZusammenfassung(istStundenDezimal) {
 // ===================================
 // LocalStorage Funktionen
 // ===================================
+
+// Aktuelle Version der Datenstruktur
+const DATEN_VERSION = 1;
+
+/**
+ * Migriert alte Datenstrukturen auf die aktuelle Version
+ * @param {Object} daten - Die zu migrierenden Daten
+ * @returns {Object} - Die migrierten Daten
+ */
+function migriereAlteVersion(daten) {
+    const version = daten._version || 0;
+    
+    if (version === DATEN_VERSION) {
+        return daten; // Bereits aktuelle Version
+    }
+    
+    // Migration von Version 0 (keine Version) auf Version 1
+    if (version === 0) {
+        // Füge Versionsnummer hinzu, Datenstruktur bleibt gleich
+        daten._version = 1;
+    }
+    
+    // Hier können zukünftige Migrationen hinzugefügt werden:
+    // if (version < 2) { ... }
+    // if (version < 3) { ... }
+    
+    return daten;
+}
+
 function ladeDatenAusLocalStorage() {
     const gespeichert = localStorage.getItem('zeiterfassungDaten');
     if (gespeichert) {
         try {
-            zeiterfassungDaten = JSON.parse(gespeichert);
+            let daten = JSON.parse(gespeichert);
+            
+            // Prüfe und migriere Datenversion
+            daten = migriereAlteVersion(daten);
+            
+            zeiterfassungDaten = daten;
         } catch (e) {
-            zeiterfassungDaten = {};
+            console.error('Fehler beim Parsen:', e);
+            zeiterfassungDaten = { _version: DATEN_VERSION };
         }
+    } else {
+        // Neue Installation: Initialisiere mit aktueller Version
+        zeiterfassungDaten = { _version: DATEN_VERSION };
+    }
+}
+
+/**
+ * Prüft den verfügbaren Speicherplatz im LocalStorage
+ * Warnt den Benutzer bei Annäherung an das Limit (~5-10MB)
+ * @returns {Object} - Objekt mit Speicherinformationen
+ */
+function pruefeSpeicherplatz() {
+    try {
+        // Berechne aktuell verwendeten Speicher
+        let verwendeterSpeicher = 0;
+        for (let key in localStorage) {
+            if (localStorage.hasOwnProperty(key)) {
+                verwendeterSpeicher += localStorage[key].length + key.length;
+            }
+        }
+        
+        // Geschätztes Limit: 5MB (5 * 1024 * 1024 Bytes)
+        const geschaetztesLimit = 5 * 1024 * 1024;
+        const verwendetInMB = (verwendeterSpeicher / (1024 * 1024)).toFixed(2);
+        const limitInMB = (geschaetztesLimit / (1024 * 1024)).toFixed(2);
+        const prozentVerwendet = (verwendeterSpeicher / geschaetztesLimit * 100).toFixed(1);
+        
+        // Warnung bei >80% Auslastung
+        if (prozentVerwendet > 80) {
+            zeigeToast(
+                `Warnung: LocalStorage zu ${prozentVerwendet}% voll (${verwendetInMB}MB). Bitte erstellen Sie ein Backup und löschen Sie alte Daten.`,
+                'warning'
+            );
+        }
+        
+        return {
+            verwendeterSpeicher,
+            geschaetztesLimit,
+            prozentVerwendet: parseFloat(prozentVerwendet),
+            verwendetInMB: parseFloat(verwendetInMB)
+        };
+    } catch (error) {
+        console.error('Fehler bei Speicherplatzprüfung:', error);
+        return null;
     }
 }
 
 function speichereDatenInLocalStorage() {
-    localStorage.setItem('zeiterfassungDaten', JSON.stringify(zeiterfassungDaten));
+    // Prüfe Speicherplatz vor dem Speichern
+    pruefeSpeicherplatz();
+    
+    // Stelle sicher, dass die Versionsnummer gesetzt ist
+    if (!zeiterfassungDaten._version) {
+        zeiterfassungDaten._version = DATEN_VERSION;
+    }
+    
+    const jsonString = JSON.stringify(zeiterfassungDaten);
+    localStorage.setItem('zeiterfassungDaten', jsonString);
 }
 
 function getMonatsKey(jahr, monat) {
-    return `${jahr}-${monat.toString().padStart(2, '0')}`;
+    // monat ist 0-basiert (0=Januar, 1=Februar, 2=März, ...)
+    // Für den Key brauchen wir 1-basiert (01=Januar, 02=Februar, 03=März, ...)
+    const monatEinsBasiert = monat + 1;
+    return `${jahr}-${monatEinsBasiert.toString().padStart(2, '0')}`;
 }
 
 function ladeDatenFuerMonat(jahr, monat) {
@@ -2812,10 +4614,38 @@ function ladeDatenFuerMonat(jahr, monat) {
         Object.keys(monatsDaten.tage).forEach(tag => {
             const tagDaten = monatsDaten.tage[tag];
             
+            // Prüfe ob dieser Tag ein Urlaubstag ist
+            const datum = new Date(jahr, monat, parseInt(tag));
+            const istUrlaub = istUrlaubstag(datum);
+            
             // Desktop: Tabellenzeile
             const tr = document.querySelector(`#zeiterfassungBody tr[data-tag="${tag}"]`);
             if (tr) {
                 Object.keys(tagDaten).forEach(field => {
+                    // Überspringe Gesamt-Feld IMMER - wird immer neu berechnet
+                    if (field === 'gesamt') {
+                        return;
+                    }
+                    // Überspringe Stundenfeld für Urlaub/Krank NUR wenn KEINE von2/bis2 Werte vorhanden sind
+                    // (bei halben Urlaubstagen mit Arbeitszeit muss das Stundenfeld geladen werden)
+                    if (field === 'stunden') {
+                        const von1Wert = tagDaten['von1'];
+                        if (von1Wert === 'Urlaub' || von1Wert === 'Krank') {
+                            // Prüfe ob von2/bis2 vorhanden sind
+                            const hatVon2Bis2 = tagDaten['von2'] && tagDaten['bis2'] &&
+                                              tagDaten['von2'] !== 'XXXXX' && tagDaten['bis2'] !== 'XXXXX' &&
+                                              tagDaten['von2'] !== '' && tagDaten['bis2'] !== '';
+                            // Nur überspringen wenn KEINE Arbeitszeit vorhanden ist
+                            if (!hatVon2Bis2) {
+                                return;
+                            }
+                        }
+                    }
+                    // Überspringe Von1-Feld wenn es kein Urlaubstag mehr ist
+                    // (verhindert dass "Urlaub"/"Krank" wieder eingetragen wird nach Löschen)
+                    if (!istUrlaub && field === 'von1' && (tagDaten[field] === 'Urlaub' || tagDaten[field] === 'Krank')) {
+                        return;
+                    }
                     const input = tr.querySelector(`[data-field="${field}"]`);
                     if (input) {
                         input.value = tagDaten[field];
@@ -2827,6 +4657,30 @@ function ladeDatenFuerMonat(jahr, monat) {
             const card = document.querySelector(`#mobileCardContainer .day-card[data-tag="${tag}"]`);
             if (card) {
                 Object.keys(tagDaten).forEach(field => {
+                    // Überspringe Gesamt-Feld IMMER - wird immer neu berechnet
+                    if (field === 'gesamt') {
+                        return;
+                    }
+                    // Überspringe Stundenfeld für Urlaub/Krank NUR wenn KEINE von2/bis2 Werte vorhanden sind
+                    // (bei halben Urlaubstagen mit Arbeitszeit muss das Stundenfeld geladen werden)
+                    if (field === 'stunden') {
+                        const von1Wert = tagDaten['von1'];
+                        if (von1Wert === 'Urlaub' || von1Wert === 'Krank') {
+                            // Prüfe ob von2/bis2 vorhanden sind
+                            const hatVon2Bis2 = tagDaten['von2'] && tagDaten['bis2'] &&
+                                              tagDaten['von2'] !== 'XXXXX' && tagDaten['bis2'] !== 'XXXXX' &&
+                                              tagDaten['von2'] !== '' && tagDaten['bis2'] !== '';
+                            // Nur überspringen wenn KEINE Arbeitszeit vorhanden ist
+                            if (!hatVon2Bis2) {
+                                return;
+                            }
+                        }
+                    }
+                    // Überspringe Von1-Feld wenn es kein Urlaubstag mehr ist
+                    // (verhindert dass "Urlaub"/"Krank" wieder eingetragen wird nach Löschen)
+                    if (!istUrlaub && field === 'von1' && (tagDaten[field] === 'Urlaub' || tagDaten[field] === 'Krank')) {
+                        return;
+                    }
                     const element = card.querySelector(`[data-field="${field}"]`);
                     if (element) {
                         if (element.tagName === 'INPUT') {
@@ -2870,31 +4724,37 @@ function getUebertragVormonatInStunden() {
 
 // ===================================
 // Speichern Funktionen
-// ===================================
-function speichereZeile(tag) {
-    
-    // Desktop: Tabellenzeile
+// Hilfsfunktion: Findet das aktive Element (Desktop oder Mobile)
+function findeAktivesElement(tag) {
     const tr = document.querySelector(`#zeiterfassungBody tr[data-tag="${tag}"]`);
-    // Mobile: Card
     const card = document.querySelector(`#mobileCardContainer .day-card[data-tag="${tag}"]`);
+    const istMobileAnsicht = window.innerWidth < MOBILE_BREAKPOINT;
     
-    // Prüfe welche Ansicht aktiv ist (basierend auf Bildschirmbreite)
-    const istMobileAnsicht = window.innerWidth < 992;
-    
-    // Wähle das richtige Element basierend auf der aktiven Ansicht
-    let element;
     if (istMobileAnsicht && card) {
-        element = card;
+        return card;
     } else if (tr) {
-        element = tr;
-    } else {
-        element = card || tr;
+        return tr;
     }
+    return card || tr;
+}
 
-    if (!element) {
-        return;
-    }
+// Hilfsfunktion: Extrahiert Felddaten aus einem Element
+function extrahiereFeldDaten(element, istUrlaubOderKrank) {
+    const inputs = element.querySelectorAll('input[data-field], span[data-field]');
+    const daten = {};
     
+    inputs.forEach(input => {
+        const field = input.dataset.field;
+        const value = input.value || input.textContent;
+        
+        daten[field] = value;
+    });
+    
+    return daten;
+}
+
+// Hilfsfunktion: Speichert Felddaten in LocalStorage
+function speichereFeldDatenInLocalStorage(tag, daten) {
     const key = getMonatsKey(aktuellesJahr, aktuellerMonat);
     
     if (!zeiterfassungDaten[key]) {
@@ -2905,32 +4765,163 @@ function speichereZeile(tag) {
         zeiterfassungDaten[key].tage[tag] = {};
     }
     
-    // Prüfe ob Von1-Feld "Urlaub" enthält
-    const von1Input = element.querySelector('[data-field="von1"]');
-    const von1Value = von1Input ? (von1Input.value || von1Input.textContent || '').trim().toLowerCase() : '';
-    const istUrlaubEingabe = von1Value === 'urlaub';
-    
-    // Alle Felder speichern (inputs und spans)
-    const inputs = element.querySelectorAll('input[data-field], span[data-field]');
-    inputs.forEach(input => {
-        const field = input.dataset.field;
-        const value = input.value || input.textContent;
-        zeiterfassungDaten[key].tage[tag][field] = value;
-    });
-    
-    // Manuell editierte Stunden-Felder speichern
+    Object.assign(zeiterfassungDaten[key].tage[tag], daten);
     zeiterfassungDaten[key].manuellEditierteStunden = Array.from(manuellEditierteStunden);
     
-    speichereDatenInLocalStorage();
+    try {
+        speichereDatenInLocalStorage();
+    } catch (error) {
+        console.error('Fehler beim Speichern:', error);
+        if (error.name === 'QuotaExceededError') {
+            zeigeToast('Speicher voll! Bitte erstellen Sie ein Backup und löschen Sie alte Daten.', 'error');
+        } else {
+            zeigeToast('Fehler beim Speichern der Daten', 'error');
+        }
+        return; // Verhindere weitere Verarbeitung
+    }
+}
+
+// Hilfsfunktion: Behandelt Änderungen bei Urlaub/Krank
+function behandleUrlaubKrankAenderung(tag, von1Value, alterVon1Wert) {
+    const hatSichGeaendert = von1Value !== alterVon1Wert;
     
-    // Wenn "Urlaub" eingegeben wurde, aktualisiere visuelle Markierung
-    if (istUrlaubEingabe) {
-        // Desktop: Zeile
+    // Wenn "Urlaub" oder "Krank" neu eingegeben wurde
+    if (hatSichGeaendert && (von1Value === 'Urlaub' || von1Value === 'Krank')) {
+        const datum = erstelleDatumFuerTag(tag);
+        const istKrank = von1Value === 'Krank';
+        manuellEditierteStunden.delete(tag);
+        
+        // Prüfe ob von2/bis2 oder Bemerkung gefüllt sind für halben Tag
+        const element = findeAktivesElement(tag);
+        if (element) {
+            const von2Input = element.querySelector('[data-field="von2"]');
+            const bis2Input = element.querySelector('[data-field="bis2"]');
+            const vornachInput = element.querySelector('[data-field="vornach"]');
+            
+            const von2 = von2Input ? von2Input.value : '';
+            const bis2 = bis2Input ? bis2Input.value : '';
+            const vornach = vornachInput ? vornachInput.value : '';
+            
+            const hatArbeitszeit = von2 && bis2 && von2 !== 'XXXXX' && bis2 !== 'XXXXX' && von2 !== '' && bis2 !== '';
+            const hatBemerkungStunden = vornach && vornach !== 'XXXXX' && /^\d{1,2}:\d{2}$/.test(vornach.trim());
+            
+            if (hatArbeitszeit || hatBemerkungStunden) {
+                // Halber Urlaubstag
+                aktualisiereUrlaubstageProTag(datum, 0.5, istKrank);
+            } else {
+                // Ganzer Urlaubstag
+                aktualisiereUrlaubstageProTag(datum, 1.0, istKrank);
+            }
+        } else {
+            // Fallback: Ganzer Tag
+            aktualisiereUrlaubstageProTag(datum, 1.0, istKrank);
+        }
+        
+        fuegeUrlaubstagAutomatischHinzu(tag);
+        aktualisiereUrlaubsliste();
+        aktualisiereUrlaubskalenderBadge();
+        
+        // WICHTIG: Rufe NICHT ladeMonat() auf, da dies alle Eingabefelder zurücksetzt
+        // und der Benutzer möglicherweise noch von2/bis2 eingeben möchte
+        // Stattdessen nur die Berechnung aktualisieren
+        berechneZeile(tag);
+        berechneAlleZeilen();
+        
+        return false; // Wichtig: false zurückgeben, damit die normale Verarbeitung fortgesetzt wird
+    }
+    
+    // Wenn "Urlaub" oder "Krank" entfernt wurde
+    if (hatSichGeaendert && von1Value === '' && (alterVon1Wert === 'Urlaub' || alterVon1Wert === 'Krank')) {
+        const datum = erstelleDatumFuerTag(tag);
+        aktualisiereUrlaubstageProTag(datum, 0);
+        aktualisiereUrlaubsliste();
+        aktualisiereUrlaubskalenderBadge();
+        
+        // BUGFIX: Speichere ALLE ungespeicherten Tage BEVOR ladeMonat() aufgerufen wird.
+        // Grund: ladeMonat() lädt alle Daten aus LocalStorage neu und würde dabei
+        // ungespeicherte Änderungen in anderen Tagen überschreiben und verlieren.
+        // Dies tritt auf, wenn ein Benutzer mehrere Tage bearbeitet und dann
+        // einen davon als Urlaub/Krank markiert.
+        speichereAlleUngespeichertenTage(tag);
+        ladeMonat(aktuellesJahr, aktuellerMonat);
+        return true;
+    }
+    
+    return false;
+}
+
+/**
+ * Speichert alle ungespeicherten Tage außer dem aktuellen Tag.
+ *
+ * BUGFIX-Funktion: Verhindert Datenverlust, wenn ladeMonat() aufgerufen wird.
+ * ladeMonat() lädt alle Daten aus LocalStorage neu und würde dabei ungespeicherte
+ * Änderungen in anderen Tagen überschreiben. Dies tritt auf, wenn ein Benutzer
+ * mehrere Tage bearbeitet und dann einen davon als Urlaub/Krank markiert.
+ *
+ * Die Funktion erstellt ein Backup der Daten vor dem Speichern und stellt dieses
+ * bei Fehlern automatisch wieder her.
+ *
+ * @param {number} ausgenommenTag - Der Tag, der NICHT gespeichert werden soll (typischerweise der aktuell bearbeitete Tag)
+ * @returns {void}
+ */
+function speichereAlleUngespeichertenTage(ausgenommenTag) {
+    const ungespeicherteTageKopie = new Set(ungespeicherteTage);
+    
+    // Backup der zeiterfassungDaten erstellen
+    const backup = JSON.parse(JSON.stringify(zeiterfassungDaten));
+    let fehlerBeiSpeicherung = false;
+    
+    // Cache DOM-Referenzen vor der Schleife für bessere Performance
+    const alleTrs = new Map();
+    const alleCards = new Map();
+    document.querySelectorAll('#zeiterfassungBody tr[data-tag]').forEach(tr => {
+        alleTrs.set(parseInt(tr.dataset.tag), tr);
+    });
+    document.querySelectorAll('#mobileCardContainer .day-card[data-tag]').forEach(card => {
+        alleCards.set(parseInt(card.dataset.tag), card);
+    });
+    
+    ungespeicherteTageKopie.forEach(tag => {
+        if (tag !== ausgenommenTag) {
+            try {
+                const trExists = alleTrs.has(tag);
+                const cardExists = alleCards.has(tag);
+                
+                if (trExists || cardExists) {
+                    speichereZeile(tag, true);
+                }
+            } catch (error) {
+                console.error(`Fehler beim Speichern von Tag ${tag}:`, error);
+                fehlerBeiSpeicherung = true;
+                
+                // Bei Fehler: Backup wiederherstellen
+                zeiterfassungDaten = backup;
+                try {
+                    speichereDatenInLocalStorage();
+                } catch (restoreError) {
+                    console.error('Kritischer Fehler beim Wiederherstellen des Backups:', restoreError);
+                }
+                
+                zeigeToast('Fehler beim Speichern. Änderungen wurden rückgängig gemacht.', 'error');
+                return; // Abbruch der Schleife
+            }
+        }
+    });
+    
+    if (fehlerBeiSpeicherung) {
+        zeigeToast('Warnung: Einige Änderungen konnten nicht gespeichert werden', 'warning');
+    }
+}
+
+// Hilfsfunktion: Aktualisiert visuelle Markierungen für Urlaub
+function aktualisiereVisuellMarkierungen(tag, istUrlaub) {
+    const tr = document.querySelector(`#zeiterfassungBody tr[data-tag="${tag}"]`);
+    const card = document.querySelector(`#mobileCardContainer .day-card[data-tag="${tag}"]`);
+    
+    if (istUrlaub) {
         if (tr) {
             tr.classList.add('urlaub-row');
         }
-        
-        // Mobile: Card
         if (card) {
             card.classList.add('urlaub-card');
             const header = card.querySelector('.day-card-header');
@@ -2939,11 +4930,9 @@ function speichereZeile(tag) {
             }
         }
     } else {
-        // Wenn "Urlaub" entfernt wurde, entferne Markierung
         if (tr) {
             tr.classList.remove('urlaub-row');
         }
-        
         if (card) {
             card.classList.remove('urlaub-card');
             const header = card.querySelector('.day-card-header');
@@ -2952,12 +4941,97 @@ function speichereZeile(tag) {
             }
         }
     }
+}
+
+// ===================================
+// Zeile aus Daten holen
+// ===================================
+function holeZeile(tag) {
+    const monatsKey = getMonatsKey(aktuellesJahr, aktuellerMonat);
+    if (zeiterfassungDaten[monatsKey] && zeiterfassungDaten[monatsKey].tage && zeiterfassungDaten[monatsKey].tage[tag]) {
+        return zeiterfassungDaten[monatsKey].tage[tag];
+    }
+    return null;
+}
+
+// ===================================
+function speichereZeile(tag, skipUrlaubKrankCheck = false) {
+    // Füge zur Queue hinzu
+    speicherQueue.push({ tag, skipUrlaubKrankCheck });
     
-    // Synchronisiere die andere Ansicht (Desktop <-> Mobile)
-    synchronisiereAnsichten(tag);
+    // Starte Queue-Verarbeitung wenn nicht bereits aktiv
+    if (!speicherQueueAktiv) {
+        verarbeiteSpeicherQueue();
+    }
+}
+
+async function verarbeiteSpeicherQueue() {
+    if (speicherQueueAktiv) {
+        return;
+    }
     
-    berechneAlleZeilen();
+    speicherQueueAktiv = true;
     
+    while (speicherQueue.length > 0) {
+        const { tag, skipUrlaubKrankCheck } = speicherQueue.shift();
+        
+        // Validierung
+        if (!Number.isInteger(tag) || tag < 1 || tag > 31) {
+            console.error('Ungültiger Tag-Parameter:', tag);
+            continue;
+        }
+        
+        // Finde das aktive Element (Desktop oder Mobile)
+        const element = findeAktivesElement(tag);
+        if (!element) {
+            continue;
+        }
+        
+        // Hole den alten Von1-Wert vor dem Überschreiben
+        const key = getMonatsKey(aktuellesJahr, aktuellerMonat);
+        const alterVon1Wert = zeiterfassungDaten[key]?.tage[tag]?.von1 || '';
+        
+        // Extrahiere aktuellen Von1-Wert
+        const von1Input = element.querySelector('[data-field="von1"]');
+        const von1Value = von1Input ? (von1Input.value || von1Input.textContent || '').trim() : '';
+        const istUrlaubOderKrank = von1Value === 'Urlaub' || von1Value === 'Krank';
+        
+        // WICHTIG: Berechne Stunden VOR dem Extrahieren, damit der aktuelle Wert gespeichert wird
+        const berechnetesStundenfeld = berechneZeile(tag);
+        
+        // Extrahiere und speichere Felddaten
+        const daten = extrahiereFeldDaten(element, istUrlaubOderKrank);
+        
+        // Überschreibe das Stundenfeld mit dem berechneten Wert (falls vorhanden)
+        // WICHTIG: Immer überschreiben, nicht nur bei Urlaub/Krank, damit beim Löschen
+        // von "Urlaub"/"Krank" die Stunden korrekt neu berechnet werden
+        if (berechnetesStundenfeld !== undefined && berechnetesStundenfeld !== null) {
+            daten.stunden = berechnetesStundenfeld;
+        }
+        
+        speichereFeldDatenInLocalStorage(tag, daten);
+        
+        // Behandle Urlaub/Krank-Änderungen
+        if (!skipUrlaubKrankCheck) {
+            const wurdeBehandelt = behandleUrlaubKrankAenderung(tag, von1Value, alterVon1Wert);
+            if (wurdeBehandelt) {
+                continue; // Nächsten Eintrag verarbeiten, da ladeMonat() alles neu aufbaut
+            }
+        }
+        
+        // Aktualisiere visuelle Markierungen
+        const istUrlaubEingabe = von1Value.toLowerCase() === 'urlaub';
+        aktualisiereVisuellMarkierungen(tag, istUrlaubEingabe);
+        
+        // Synchronisiere Ansichten und berechne Zeilen
+        synchronisiereAnsichten(tag);
+        berechneAlleZeilen();
+        
+        // Kurze Pause zwischen Operationen für UI-Responsiveness
+        await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    
+    speicherQueueAktiv = false;
 }
 
 function speichereZeileMitFeedback(tag) {
@@ -2990,10 +5064,13 @@ function synchronisiereAnsichten(tag) {
         if (istUrlaubEingabe) {
             tr.classList.add('urlaub-row');
             
-            // Aktualisiere Tag-Spalte mit "Urlaub"-Text
+            // Aktualisiere Tag-Spalte mit "Urlaub"-Text (sicher)
             const tdTag = tr.querySelector('td:first-child');
             if (tdTag && !tdTag.innerHTML.includes('Urlaub')) {
-                tdTag.innerHTML = `${tag}<br><small style="font-weight: normal; font-size: 0.8em; color: #198754;">Urlaub</small>`;
+                setElementContentSafe(tdTag, tag, {
+                    subText: 'Urlaub',
+                    subTextColor: '#198754'
+                });
             }
         } else {
             tr.classList.remove('urlaub-row');
@@ -3004,8 +5081,10 @@ function synchronisiereAnsichten(tag) {
                 // Prüfe ob es ein Feiertag ist
                 const feiertagMatch = tdTag.innerHTML.match(/<small[^>]*>(?!Urlaub)([^<]+)<\/small>/);
                 if (feiertagMatch) {
-                    // Feiertag beibehalten
-                    tdTag.innerHTML = `${tag}<br><small style="font-weight: normal; font-size: 0.8em;">${feiertagMatch[1]}</small>`;
+                    // Feiertag beibehalten (sicher)
+                    setElementContentSafe(tdTag, tag, {
+                        subText: feiertagMatch[1]
+                    });
                 } else {
                     // Nur Tag-Nummer
                     tdTag.textContent = tag;
@@ -3035,11 +5114,19 @@ function synchronisiereAnsichten(tag) {
             if (header) {
                 header.classList.add('urlaub-header');
                 
-                // Aktualisiere Wochentag-Text mit "Urlaub"
+                // Aktualisiere Wochentag-Text mit "Urlaub" (sicher)
                 const dayName = header.querySelector('.day-name');
                 if (dayName && !dayName.innerHTML.includes('Urlaub')) {
                     const wochentagText = dayName.textContent.split('(')[0].trim();
-                    dayName.innerHTML = `${wochentagText} <span style="font-size: 0.85em; color: #d4edda;">(Urlaub)</span>`;
+                    dayName.textContent = wochentagText + ' ';
+                    const statusSpan = createElementSafe('span', {
+                        text: '(Urlaub)',
+                        style: {
+                            fontSize: '0.85em',
+                            color: '#d4edda'
+                        }
+                    });
+                    dayName.appendChild(statusSpan);
                 }
             }
         } else {
@@ -3047,15 +5134,22 @@ function synchronisiereAnsichten(tag) {
             if (header) {
                 header.classList.remove('urlaub-header');
                 
-                // Entferne "Urlaub"-Text aus Wochentag
+                // Entferne "Urlaub"-Text aus Wochentag (sicher)
                 const dayName = header.querySelector('.day-name');
                 if (dayName && dayName.innerHTML.includes('Urlaub')) {
                     const wochentagText = dayName.textContent.split('(')[0].trim();
                     // Prüfe ob es ein Feiertag ist
                     const feiertagMatch = dayName.innerHTML.match(/\((?!Urlaub)([^)]+)\)/);
                     if (feiertagMatch) {
-                        // Feiertag beibehalten
-                        dayName.innerHTML = `${wochentagText} <span style="font-size: 0.85em;">(${feiertagMatch[1]})</span>`;
+                        // Feiertag beibehalten (sicher)
+                        dayName.textContent = wochentagText + ' ';
+                        const statusSpan = createElementSafe('span', {
+                            text: `(${feiertagMatch[1]})`,
+                            style: {
+                                fontSize: '0.85em'
+                            }
+                        });
+                        dayName.appendChild(statusSpan);
                     } else {
                         // Nur Wochentag
                         dayName.textContent = wochentagText;
@@ -3109,6 +5203,15 @@ function markiereAlsGespeichert(tag) {
         tr.classList.remove('unsaved-changes');
         tr.classList.add('saved-changes');
         
+        // Speichern-Button zurücksetzen auf Standard-Stil
+        const saveBtn = tr.querySelector('[data-save-btn]');
+        if (saveBtn) {
+            // Entferne alle Button-Stil-Klassen
+            saveBtn.className = 'btn btn-sm btn-outline-secondary card-save-btn-default btn-save-row';
+            saveBtn.dataset.tag = tag;
+            saveBtn.dataset.saveBtn = '';
+        }
+        
         // Nach 2 Sekunden grüne Markierung entfernen
         setTimeout(() => {
             tr.classList.remove('saved-changes');
@@ -3120,6 +5223,15 @@ function markiereAlsGespeichert(tag) {
     if (card) {
         card.classList.remove('unsaved-changes');
         card.classList.add('saved-changes');
+        
+        // Speichern-Button zurücksetzen auf Standard-Stil
+        const saveBtn = card.querySelector('[data-save-btn]');
+        if (saveBtn) {
+            // Entferne alle Button-Stil-Klassen und setze komplett neu
+            saveBtn.className = 'btn btn-sm btn-outline-secondary card-save-btn-default';
+            saveBtn.dataset.tag = tag;
+            saveBtn.dataset.saveBtn = '';
+        }
         
         // Nach 2 Sekunden grüne Markierung entfernen
         setTimeout(() => {
@@ -3266,6 +5378,9 @@ function speichereWochenstunden() {
     document.getElementById('wochenstunden').value = wert;
     document.getElementById('wochenstundenMobile').value = wert;
     
+    // Aktualisiere Stunden pro Tag Anzeige
+    aktualisiereStundenProTagAnzeige();
+    
     // SOLL-Stunden neu berechnen
     berechneSollStundenAutomatisch();
     
@@ -3296,8 +5411,38 @@ function ladeWochenstunden() {
         wochenstunden = 39.0;
     }
     
+    // Aktualisiere Stunden pro Tag Anzeige
+    aktualisiereStundenProTagAnzeige();
+    
     // Bundesland laden
     ladeBundesland();
+}
+
+// ===================================
+// Stunden pro Tag Anzeige aktualisieren
+// ===================================
+function aktualisiereStundenProTagAnzeige() {
+    // Hole Beschäftigungsgrad
+    const beschaeftigungsgrad = getBeschaeftigungsgrad();
+    
+    // Berechne Stunden pro Tag (Wochenstunden × Beschäftigungsgrad ÷ 5 Arbeitstage)
+    const stundenProTag = (wochenstunden * beschaeftigungsgrad) / 5;
+    
+    // Formatiere als HH:MM
+    const stunden = Math.floor(stundenProTag);
+    const minuten = Math.round((stundenProTag - stunden) * 60);
+    const formatiert = `${stunden}:${String(minuten).padStart(2, '0')}`;
+    
+    // Aktualisiere beide Anzeigen (Desktop und Mobile)
+    const desktopAnzeige = document.getElementById('stundenProTagWertDesktop');
+    const mobileAnzeige = document.getElementById('stundenProTagWertMobile');
+    
+    if (desktopAnzeige) {
+        desktopAnzeige.textContent = formatiert;
+    }
+    if (mobileAnzeige) {
+        mobileAnzeige.textContent = formatiert;
+    }
 }
 
 // ===================================
@@ -3486,11 +5631,13 @@ function erstelleBackup() {
         
         // Sammle alle Daten aus localStorage
         const backup = {
-            version: '1.1',
+            version: '1.2',
             timestamp: new Date().toISOString(),
             zeiterfassungDaten: zeiterfassungDaten,
             stammdaten: JSON.parse(localStorage.getItem('stammdaten') || '{}'),
-            urlaubstage: urlaubstage
+            urlaubstage: urlaubstage,
+            wochenstunden: localStorage.getItem('wochenstunden') || '39:00',
+            bundesland: localStorage.getItem('bundesland') || 'BW'
         };
         
         // Erstelle JSON-String
@@ -3572,6 +5719,16 @@ function stelleBackupWiederHer() {
                 });
             }
             
+            // Wochenstunden wiederherstellen (falls vorhanden)
+            if (backup.wochenstunden) {
+                localStorage.setItem('wochenstunden', backup.wochenstunden);
+            }
+            
+            // Bundesland wiederherstellen (falls vorhanden)
+            if (backup.bundesland) {
+                localStorage.setItem('bundesland', backup.bundesland);
+            }
+            
             // In localStorage speichern
             speichereDatenInLocalStorage();
             
@@ -3603,23 +5760,37 @@ function stelleBackupWiederHer() {
     reader.readAsText(file);
 }
 
-function drucken() {
+async function drucken() {
     try {
-        // Sammle alle Daten für die Druckansicht
-        const tbody = document.getElementById('zeiterfassungBody');
-        if (!tbody) {
-            return;
+        // Sammle alle Daten für die Druckansicht (Werte direkt aus DOM, ohne Neuberechnung)
+        // Prüfe welche Ansicht aktiv ist
+        const istMobileAnsicht = window.innerWidth < MOBILE_BREAKPOINT;
+        
+        let zeilen;
+        if (istMobileAnsicht) {
+            // Mobile: Hole Daten aus Cards
+            const mobileContainer = document.getElementById('mobileCardContainer');
+            if (!mobileContainer) {
+                return;
+            }
+            zeilen = mobileContainer.querySelectorAll('.day-card');
+        } else {
+            // Desktop: Hole Daten aus Tabelle
+            const tbody = document.getElementById('zeiterfassungBody');
+            if (!tbody) {
+                return;
+            }
+            zeilen = tbody.querySelectorAll('tr');
         }
         
-        const zeilen = tbody.querySelectorAll('tr');
-        
-        // Zähle Urlaubstage im aktuellen Monat
+        // Zähle Urlaubstage im aktuellen Monat (OHNE Kranktage)
         let urlaubstageImMonat = 0;
         const anzahlTage = new Date(aktuellesJahr, aktuellerMonat + 1, 0).getDate();
         for (let tag = 1; tag <= anzahlTage; tag++) {
-            const datum = new Date(aktuellesJahr, aktuellerMonat, tag);
-            const urlaubstage = ladeUrlaubstageProTag(datum);
-            if (urlaubstage > 0) {
+            const datum = erstelleDatumFuerTag(tag);
+            const urlaubstage = holeUrlaubstag(datum);
+            // Nur Urlaubstage zählen, KEINE Kranktage
+            if (urlaubstage > 0 && !istKranktag(datum)) {
                 urlaubstageImMonat += urlaubstage;
             }
         }
@@ -3639,19 +5810,71 @@ function drucken() {
         };
         
         
-        // Alle Zeilen sammeln
-        zeilen.forEach(tr => {
+        // Alle Zeilen sammeln und kumulative Summe berechnen
+        // Starte mit Übertrag vom Vormonat (in Dezimalstunden)
+        let kumuliert = getUebertragVormonatInStunden();
+        
+        zeilen.forEach(element => {
+            const tag = element.dataset.tag;
+            
+            // Hole Stunden-Wert - unterschiedlich für Desktop (input.value) und Mobile (span.textContent)
+            const stundenElement = element.querySelector('[data-field="stunden"]');
+            let stundenWert = '';
+            if (stundenElement) {
+                stundenWert = stundenElement.tagName === 'INPUT'
+                    ? (stundenElement.value || '')
+                    : (stundenElement.textContent || '');
+            }
+            
+            // Berechne kumulative Summe für Gesamt-Spalte (wie in berechneAlleZeilen)
+            let stundenDezimal = 0;
+            if (stundenWert !== 'XXXXX' && stundenWert !== '') {
+                stundenDezimal = parseStundenZuDezimal(stundenWert);
+            }
+            
+            // Kumulieren
+            kumuliert += stundenDezimal;
+            
+            // Formatiere kumulative Summe
+            const gesamtWert = stundenWert === 'XXXXX' ? 'XXXXX' : formatStunden(kumuliert);
+            
+            // Hilfsfunktion zum Holen von Feldwerten (funktioniert für Desktop und Mobile)
+            const getFeldWert = (feldName) => {
+                const feld = element.querySelector(`[data-field="${feldName}"]`);
+                if (!feld) return '';
+                return feld.tagName === 'INPUT' ? (feld.value || '') : (feld.textContent || '');
+            };
+            
+            // Wochentag holen - unterschiedlich für Desktop (tr.children[1]) und Mobile (day-name)
+            let wochentag = '';
+            if (istMobileAnsicht) {
+                // Mobile: Aus dem day-name div im Header
+                const dayNameDiv = element.querySelector('.day-name');
+                if (dayNameDiv) {
+                    // Extrahiere nur den Wochentag-Text (vor dem ersten Leerzeichen oder Klammer)
+                    const text = dayNameDiv.textContent.trim();
+                    // Entferne Status-Text wie "(Urlaub)" oder "(Krank)"
+                    wochentag = text.split(/[\s(]/)[0] || '';
+                }
+            } else {
+                // Desktop: Zweite Spalte (children[1] ist die Wochentag-Spalte)
+                const wochentagZelle = element.children[1];
+                if (wochentagZelle) {
+                    wochentag = wochentagZelle.textContent.trim();
+                }
+            }
+            
             druckDaten.zeilen.push({
-                tag: tr.dataset.tag,
-                wochentag: tr.children[1].textContent,
-                von1: tr.querySelector('[data-field="von1"]').value || '',
-                bis1: tr.querySelector('[data-field="bis1"]').value || '',
-                von2: tr.querySelector('[data-field="von2"]').value || '',
-                bis2: tr.querySelector('[data-field="bis2"]').value || '',
-                vornach: tr.querySelector('[data-field="vornach"]').value || '',
-                stunden: tr.querySelector('[data-field="stunden"]').value || '',
-                gesamt: tr.querySelector('[data-field="gesamt"]').value || '',
-                istWochenende: tr.classList.contains('weekend-row')
+                tag: tag,
+                wochentag: wochentag,
+                von1: getFeldWert('von1'),
+                bis1: getFeldWert('bis1'),
+                von2: getFeldWert('von2'),
+                bis2: getFeldWert('bis2'),
+                vornach: getFeldWert('vornach'),
+                stunden: stundenWert,
+                gesamt: gesamtWert,  // Korrekt berechnete kumulative Summe
+                istWochenende: element.classList.contains('weekend-row')
             });
         });
         
@@ -3679,13 +5902,11 @@ function drucken() {
 
 // Event Listener für Stundenrechner Buttons
 document.getElementById('btnStundenrechner')?.addEventListener('click', function() {
-    const modal = new bootstrap.Modal(document.getElementById('stundenrechnerModal'));
-    modal.show();
+    zeigeModal('stundenrechnerModal');
 });
 
 document.getElementById('btnMobileStundenrechner')?.addEventListener('click', function() {
-    const modal = new bootstrap.Modal(document.getElementById('stundenrechnerModal'));
-    modal.show();
+    zeigeModal('stundenrechnerModal');
 });
 
 // Event Listener für Rechenoperationen
@@ -3808,131 +6029,4 @@ function formatMinutenZuZeit(minuten) {
     
     const vorzeichen = negativ ? '-' : '';
     return `${vorzeichen}${stunden}:${restMinuten.toString().padStart(2, '0')}`;
-
-// ===================================
-// Urlaubskalender Funktionen
-// ===================================
-
-// Urlaubstage aus LocalStorage laden
-function ladeUrlaubstage() {
-    const gespeichert = localStorage.getItem('urlaubstage');
-    if (gespeichert) {
-        try {
-            urlaubstage = JSON.parse(gespeichert);
-        } catch (e) {
-            urlaubstage = [];
-        }
-    }
-    // Aktualisiere Liste nur wenn Modal-Elemente existieren
-    if (document.getElementById('urlaubsliste')) {
-        aktualisiereUrlaubsliste();
-    }
-}
-
-// Urlaubstage in LocalStorage speichern
-function speichereUrlaubstage() {
-    localStorage.setItem('urlaubstage', JSON.stringify(urlaubstage));
-    aktualisiereUrlaubsliste();
-}
-
-// Urlaubsperiode hinzufügen
-function fuegeUrlaubHinzu(von, bis, isMobile = false) {
-    if (!von || !bis) {
-        zeigeToast('Bitte beide Daten auswählen', 'warning');
-        return;
-    }
-    
-    const vonDate = new Date(von);
-    const bisDate = new Date(bis);
-    
-    if (vonDate > bisDate) {
-        zeigeToast('Start-Datum muss vor End-Datum liegen', 'warning');
-        return;
-    }
-    
-    // Neue Urlaubsperiode erstellen
-    const neuerUrlaub = {
-        von: von,
-        bis: bis,
-        id: Date.now()
-    };
-    
-    urlaubstage.push(neuerUrlaub);
-    speichereUrlaubstage();
-    
-    // Eingabefelder leeren
-    if (isMobile) {
-        document.getElementById('urlaubVonMobile').value = '';
-        document.getElementById('urlaubBisMobile').value = '';
-    } else {
-        document.getElementById('urlaubVon').value = '';
-        document.getElementById('urlaubBis').value = '';
-    }
-    
-    // Berechne Anzahl Tage
-    const tage = berechneUrlaubstage(vonDate, bisDate);
-    zeigeToast(`Urlaub hinzugefügt: ${tage} Tag(e)`, 'success');
-    
-    // Aktualisiere Monatsansicht wenn im aktuellen Monat
-    const aktuellerMonatStart = new Date(aktuellesJahr, aktuellerMonat, 1);
-    const aktuellerMonatEnde = new Date(aktuellesJahr, aktuellerMonat + 1, 0);
-    
-    if ((vonDate <= aktuellerMonatEnde && bisDate >= aktuellerMonatStart)) {
-        ladeMonat(aktuellesJahr, aktuellerMonat);
-    }
-}
-
-// Berechne Anzahl Urlaubstage (ohne Wochenenden und Feiertage)
-function berechneUrlaubstage(vonDate, bisDate) {
-    let tage = 0;
-    const current = new Date(vonDate);
-    
-    while (current <= bisDate) {
-        const wochentag = current.getDay();
-        
-        // Prüfe ob Feiertag (wenn Feature aktiviert)
-        let istFeiertagHeute = false;
-        if (FEATURES.FEIERTAGE_LADEN) {
-            const jahr = current.getFullYear();
-            const monat = current.getMonth();
-            const tag = current.getDate();
-            const cacheKey = `${jahr}-${bundesland}`;
-            
-            if (feiertageCache[cacheKey]) {
-                const monatString = String(monat + 1).padStart(2, '0');
-                const tagString = String(tag).padStart(2, '0');
-                const datumString = `${jahr}-${monatString}-${tagString}`;
-                istFeiertagHeute = feiertageCache[cacheKey].has(datumString);
-            }
-        }
-        
-        // Zähle nur Werktage (Mo-Fr) die keine Feiertage sind
-        if (wochentag !== 0 && wochentag !== 6 && !istFeiertagHeute) {
-            tage++;
-        }
-        current.setDate(current.getDate() + 1);
-    }
-    
-    return tage;
-}
-
-// Urlaubsperiode löschen
-function loescheUrlaub(id) {
-    urlaubstage = urlaubstage.filter(u => u.id !== id);
-    speichereUrlaubstage();
-    zeigeToast('Urlaub gelöscht', 'info');
-    
-    // Aktualisiere Monatsansicht
-    ladeMonat(aktuellesJahr, aktuellerMonat);
-}
-
-// Prüfe ob ein Datum ein Urlaubstag ist
-function istUrlaubstag(datum) {
-    const datumString = datum.toISOString().split('T')[0];
-    
-    return urlaubstage.some(urlaub => {
-        return datumString >= urlaub.von && datumString <= urlaub.bis;
-    });
-}
-
 }
